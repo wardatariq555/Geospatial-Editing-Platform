@@ -57,3 +57,29 @@ README.*
 *.sbn
 *.sbx
 *.zip
+
+# Publish output
+Backend/publish/
+publish/
+
+# Database backups
+db_dump/
+*.bak
+*.backup
+*.sql
+*.dump
+*.dat
+*.dat.gz
+
+# Visual Studio publish profiles
+*.pubxml
+*.publishSettings
+
+# Compiled binaries
+*.dll
+*.exe
+*.pdb
+
+# ASP.NET generated files
+*.runtimeconfig.json
+*.deps.json
