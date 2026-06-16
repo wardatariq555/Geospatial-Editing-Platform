@@ -4,7 +4,6 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-draw';
 import 'leaflet-draw/dist/leaflet.draw.css';
-import * as turf from '@turf/turf';
 import { ChevronsDown, ChevronsUp, ArrowDown, ArrowUp, Download, Eye, EyeOff, Layers, LocateFixed, MousePointer2, Save, SquarePen, SquareX, Trash2, UploadCloud } from 'lucide-react';
 import './styles.css';
 
@@ -23,23 +22,19 @@ function App() {
   const [activeDatasetId, setActiveDatasetId] = useState(null);
   const [editingDatasetId, setEditingDatasetId] = useState(null);
   const [selectedFeatureId, setSelectedFeatureId] = useState(null);
-  const [selectedFeatureIds, setSelectedFeatureIds] = useState([]);
   const [pendingEdit, setPendingEdit] = useState(null);
-  const [schemaDirtyDatasetId, setSchemaDirtyDatasetId] = useState(null);
   const [zoomRequest, setZoomRequest] = useState(null);
   const [layerZoomRequest, setLayerZoomRequest] = useState(null);
   const [attributeTableHeight, setAttributeTableHeight] = useState(230);
   const [attributeTableCollapsed, setAttributeTableCollapsed] = useState(true);
   const [attributeTableResizing, setAttributeTableResizing] = useState(false);
   const [stopEditingPrompt, setStopEditingPrompt] = useState(null);
-  const [showWelcome, setShowWelcome] = useState(true);
   const [status, setStatus] = useState('Ready');
   const [statusKind, setStatusKind] = useState('info');
   const [isBusy, setIsBusy] = useState(false);
   const [uploadFile, setUploadFile] = useState(null);
   const uploadInputRef = useRef(null);
   const preserveMapViewRef = useRef(() => {});
-  const flushEditableFeatureRef = useRef(() => null);
   const setAppStatus = useMemo(
     () => setAppStatusFactory(setStatus, setStatusKind),
     [],
@@ -49,11 +44,8 @@ function App() {
     ? layersById[activeDatasetId]
     : null;
   const selectedFeature = useMemo(() => {
-    if (pendingEdit?.datasetId === activeDatasetId && pendingEdit.feature?.clientId === selectedFeatureId) {
+    if (pendingEdit?.datasetId === activeDatasetId && pendingEdit.feature.clientId === selectedFeatureId) {
       return pendingEdit.feature;
-    }
-    if (pendingEdit?.datasetId === activeDatasetId && pendingEdit.kind === 'split') {
-      return pendingEdit.features.find((feature) => feature.clientId === selectedFeatureId) ?? null;
     }
     return activeLayer?.features.find((feature) => feature.clientId === selectedFeatureId) ?? null;
   }, [activeLayer, activeDatasetId, pendingEdit, selectedFeatureId]);
@@ -63,29 +55,6 @@ function App() {
   const preserveCurrentMapView = useCallback(() => {
     preserveMapViewRef.current();
   }, []);
-
-  // Hide the introduction for the current page session only.
-  const closeWelcome = () => {
-    setShowWelcome(false);
-  };
-
-  // Read the live selected Leaflet edit layer before saving, covering fast move/edit interactions.
-  const mergeLiveEditableFeature = (datasetId, editToSave) => {
-    const liveFeature = flushEditableFeatureRef.current?.();
-    if (!liveFeature || datasetId !== activeDatasetId) return editToSave;
-    if (editToSave?.kind === 'split') {
-      return {
-        ...editToSave,
-        features: editToSave.features.map((feature) =>
-          feature.clientId === liveFeature.clientId ? liveFeature : feature,
-        ),
-      };
-    }
-    if (editToSave?.kind === 'new' && editToSave.feature.clientId === liveFeature.clientId) {
-      return { ...editToSave, feature: liveFeature };
-    }
-    return { datasetId, kind: 'update', feature: liveFeature };
-  };
 
   // Load lightweight dataset records for the left layer list.
   const loadDatasets = useCallback(async () => {
@@ -137,7 +106,6 @@ function App() {
       if (options.activate && (currentLayerVisible(id, layersById) || options.forceActivate)) {
         setActiveDatasetId(id);
         setSelectedFeatureId(null);
-        setSelectedFeatureIds([]);
       }
       setAppStatus(`Loaded ${data.name}`);
       return data;
@@ -176,7 +144,6 @@ function App() {
       if (uploaded.length > 0) {
         setActiveDatasetId(null);
         setSelectedFeatureId(null);
-        setSelectedFeatureIds([]);
         setUploadFile(null);
         if (uploadInputRef.current) uploadInputRef.current.value = '';
         setAppStatus(`Uploaded ${uploaded.length} shapefile layer${uploaded.length === 1 ? '' : 's'}`);
@@ -190,11 +157,7 @@ function App() {
 
   // Enable editing for one shapefile layer only; other loaded layers stay view-only.
   const startEditing = async (datasetId) => {
-    if (
-      editingDatasetId
-      && editingDatasetId !== datasetId
-      && (pendingEdit?.datasetId === editingDatasetId || schemaDirtyDatasetId === editingDatasetId)
-    ) {
+    if (editingDatasetId && editingDatasetId !== datasetId && pendingEdit?.datasetId === editingDatasetId) {
       setStopEditingPrompt({ datasetId: editingDatasetId, nextDatasetId: datasetId });
       return;
     }
@@ -219,9 +182,7 @@ function App() {
     setActiveDatasetId(datasetId);
     setEditingDatasetId(datasetId);
     setSelectedFeatureId(null);
-    setSelectedFeatureIds([]);
     setPendingEdit(null);
-    setSchemaDirtyDatasetId(null);
     setAppStatus('Editing mode enabled');
   };
 
@@ -237,7 +198,6 @@ function App() {
     preserveCurrentMapView();
     setEditingDatasetId(null);
     setPendingEdit(null);
-    setSchemaDirtyDatasetId(null);
     setStopEditingPrompt(null);
     setAppStatus(nextDatasetId ? 'Switching editing layer...' : 'Editing mode stopped');
     if (nextDatasetId) {
@@ -250,9 +210,8 @@ function App() {
     const datasetId = stopEditingPrompt?.datasetId;
     const layer = datasetId ? layersById[datasetId] : null;
     if (!datasetId || !layer) return;
-    const editToSave = mergeLiveEditableFeature(datasetId, pendingEdit?.datasetId === datasetId ? pendingEdit : null);
-    const shouldSaveWholeLayer = schemaDirtyDatasetId === datasetId || editToSave?.kind !== 'new';
-    const result = editToSave?.kind === 'new' && !shouldSaveWholeLayer
+    const editToSave = pendingEdit?.datasetId === datasetId ? pendingEdit : null;
+    const result = editToSave?.kind === 'new'
       ? await addLayerFeature(datasetId, editToSave.feature)
       : await saveLayerFeatures(datasetId, applyPendingEdit(layer.features, editToSave), null);
     if (result) await finishStopEditing();
@@ -286,10 +245,7 @@ function App() {
           loaded: true,
         },
       }));
-      const nextSelectedFeatureId = resolveSelectedAfterSave(normalizedFeatures, selectedFeatureToKeep);
-      setSelectedFeatureId(nextSelectedFeatureId);
-      setSelectedFeatureIds(nextSelectedFeatureId ? [nextSelectedFeatureId] : []);
-      setSchemaDirtyDatasetId((current) => (current === datasetId ? null : current));
+      setSelectedFeatureId(resolveSelectedAfterSave(normalizedFeatures, selectedFeatureToKeep));
       setAppStatus(`Edits saved. ${data.features.length} features in layer.`);
       await loadDatasets();
       return data;
@@ -331,9 +287,7 @@ function App() {
         },
       }));
       setSelectedFeatureId(null);
-      setSelectedFeatureIds([]);
       setPendingEdit(null);
-      setSchemaDirtyDatasetId((current) => (current === datasetId ? null : current));
       setAppStatus(`Feature added. ${data.features.length} features in layer.`);
       await loadDatasets();
       return data;
@@ -348,15 +302,13 @@ function App() {
   // Save the currently selected feature by syncing its whole shapefile layer.
   const saveSelectedFeature = async () => {
     if (!editingDatasetId || editingDatasetId !== activeDatasetId || !activeLayer) return;
-    const editToSave = mergeLiveEditableFeature(editingDatasetId, pendingEdit?.datasetId === editingDatasetId ? pendingEdit : null);
-    const shouldSaveWholeLayer = schemaDirtyDatasetId === editingDatasetId || editToSave?.kind !== 'new';
-    const result = editToSave?.kind === 'new' && !shouldSaveWholeLayer
+    const editToSave = pendingEdit?.datasetId === editingDatasetId ? pendingEdit : null;
+    const result = editToSave?.kind === 'new'
       ? await addLayerFeature(editingDatasetId, editToSave.feature)
       : await saveLayerFeatures(editingDatasetId, applyPendingEdit(activeLayer.features, editToSave), null);
     if (result) {
       setPendingEdit(null);
       setSelectedFeatureId(null);
-      setSelectedFeatureIds([]);
     }
   };
 
@@ -366,164 +318,44 @@ function App() {
     window.location.href = `${API_BASE}/datasets/${activeDatasetId}/download?sessionId=${encodeURIComponent(EDITING_SESSION_ID)}`;
   };
 
-  // Update one attribute field on every selected feature while the panel shows the last selected feature.
-  const updateFeatureProperties = (key, value) => {
+  // Update attribute values from the right-side editor for the selected feature.
+  const updateFeatureProperties = (properties) => {
     if (!activeDatasetId || !selectedFeature) return;
 
     if (editingDatasetId === activeDatasetId) {
-      const targetFeatureIds = selectedFeatureIds.length > 0 ? selectedFeatureIds : [selectedFeatureId].filter(Boolean);
-      setLayersById((current) => {
-        const layer = current[activeDatasetId];
-        if (!layer) return current;
-        return {
-          ...current,
-          [activeDatasetId]: {
-            ...layer,
-            features: layer.features.map((feature) => (
-              targetFeatureIds.includes(feature.clientId)
-                ? { ...feature, properties: { ...(feature.properties ?? {}), [key]: value } }
-                : feature
-            )),
-          },
-        };
-      });
-
       setPendingEdit((current) => {
-        if (current?.datasetId !== activeDatasetId) return current;
-        if (current?.datasetId === activeDatasetId && current.kind === 'split') {
-          return {
-            ...current,
-            features: current.features.map((feature) =>
-              targetFeatureIds.includes(feature.clientId)
-                ? { ...feature, properties: { ...(feature.properties ?? {}), [key]: value } }
-                : feature,
-            ),
-          };
-        }
-        if (!current?.feature || !targetFeatureIds.includes(current.feature.clientId)) return current;
+        const isCurrentDraft = current?.datasetId === activeDatasetId && current.feature.clientId === selectedFeatureId;
+        const baseFeature = isCurrentDraft ? current.feature : selectedFeature;
         return {
-          ...current,
-          feature: {
-            ...current.feature,
-            properties: { ...(current.feature.properties ?? {}), [key]: value },
-          },
+          datasetId: activeDatasetId,
+          kind: isCurrentDraft ? current.kind : 'update',
+          feature: { ...baseFeature, properties },
         };
       });
-
-      setSchemaDirtyDatasetId(activeDatasetId);
     }
   };
 
-  // Add one attribute column to every feature in the active editing layer.
-  const addLayerField = () => {
-    if (!activeDatasetId || editingDatasetId !== activeDatasetId || !activeLayer) return;
-    const fieldName = nextLayerFieldName(activeLayer.features);
-    updateLayerFeatureProperties(activeDatasetId, (properties) => ({
-      ...properties,
-      [fieldName]: properties[fieldName] ?? '',
-    }));
-    setSchemaDirtyDatasetId(activeDatasetId);
-    setAppStatus(`Field ${fieldName} added to layer. Click Save to persist.`);
-  };
-
-  // Rename an attribute column across the active editing layer, not just the selected feature.
-  const renameLayerField = (oldKey, newKey) => {
-    const cleanKey = newKey.trim();
-    if (!activeDatasetId || editingDatasetId !== activeDatasetId || !activeLayer || oldKey === cleanKey || !cleanKey) return;
-    if (layerHasField(activeLayer.features, cleanKey)) return;
-    updateLayerFeatureProperties(activeDatasetId, (properties) => renamePropertyKey(properties, oldKey, cleanKey));
-    setSchemaDirtyDatasetId(activeDatasetId);
-    setAppStatus(`Field ${oldKey} renamed to ${cleanKey}. Click Save to persist.`);
-  };
-
-  // Remove an attribute column from every feature in the active editing layer.
-  const removeLayerField = (key) => {
-    if (!activeDatasetId || editingDatasetId !== activeDatasetId || !activeLayer) return;
-    updateLayerFeatureProperties(activeDatasetId, (properties) => {
-      const next = { ...properties };
-      delete next[key];
-      return next;
-    });
-    setSchemaDirtyDatasetId(activeDatasetId);
-    setAppStatus(`Field ${key} removed from layer. Click Save to persist.`);
-  };
-
-  // Apply schema-level attribute changes to every feature and to any staged selected feature.
-  const updateLayerFeatureProperties = (datasetId, updater) => {
-    setLayersById((current) => {
-      const layer = current[datasetId];
-      if (!layer) return current;
-      return {
-        ...current,
-        [datasetId]: {
-          ...layer,
-          features: layer.features.map((feature) => ({
-            ...feature,
-            properties: updater(feature.properties ?? {}),
-          })),
-        },
-      };
-    });
-
-    setPendingEdit((current) => {
-      if (current?.datasetId !== datasetId) return current;
-      if (current.kind === 'split') {
-        return {
-          ...current,
-          features: current.features.map((feature) => ({
-            ...feature,
-            properties: updater(feature.properties ?? {}),
-          })),
-        };
-      }
-      return {
-        ...current,
-        feature: {
-          ...current.feature,
-          properties: updater(current.feature.properties ?? {}),
-        },
-      };
-    });
-  };
-
-  // Delete every selected feature through the API and refresh this layer from the database response.
+  // Delete the selected feature through the API and refresh this layer from the database response.
   const removeSelectedFeature = async () => {
-    if (!activeDatasetId || editingDatasetId !== activeDatasetId || selectedFeatureIds.length === 0) return;
+    if (!activeDatasetId || editingDatasetId !== activeDatasetId || !selectedFeature) return;
 
-    const selectedFeatures = selectedFeatureIds
-      .map((featureId) => findLayerFeature(activeLayer?.features ?? [], featureId, pendingEdit))
-      .filter(Boolean);
-    if (selectedFeatures.length === 0) return;
-
-    const savedFeatures = selectedFeatures.filter((feature) => feature.id);
-    const unsavedClientIds = selectedFeatures
-      .filter((feature) => !feature.id)
-      .map((feature) => feature.clientId);
-
-    if (unsavedClientIds.length > 0) {
-      setPendingEdit((current) => removePendingFeatures(current, unsavedClientIds));
-    }
-
-    if (savedFeatures.length === 0) {
+    if (!selectedFeature.id) {
+      setPendingEdit((current) => (current?.feature.clientId === selectedFeatureId ? null : current));
       setSelectedFeatureId(null);
-      setSelectedFeatureIds([]);
-      setAppStatus(`${unsavedClientIds.length} unsaved feature${unsavedClientIds.length === 1 ? '' : 's'} removed`);
+      setAppStatus('Unsaved feature removed');
       return;
     }
 
     setIsBusy(true);
-    setAppStatus(`Deleting ${savedFeatures.length} feature${savedFeatures.length === 1 ? '' : 's'}...`);
+    setAppStatus('Deleting feature...');
     preserveCurrentMapView();
     try {
-      let data = null;
-      for (const feature of savedFeatures) {
-        const response = await apiFetch(`/datasets/${activeDatasetId}/features/${feature.id}`, {
-          method: 'DELETE',
-        });
+      const response = await apiFetch(`/datasets/${activeDatasetId}/features/${selectedFeature.id}`, {
+        method: 'DELETE',
+      });
 
-        if (!response.ok) throw new Error(await response.text());
-        data = await response.json();
-      }
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json();
       const normalizedFeatures = normalizeFeatures(data.features);
       setLayersById((current) => ({
         ...current,
@@ -536,8 +368,7 @@ function App() {
       }));
       setPendingEdit(null);
       setSelectedFeatureId(null);
-      setSelectedFeatureIds([]);
-      setAppStatus(`${selectedFeatures.length} feature${selectedFeatures.length === 1 ? '' : 's'} deleted. ${data.features.length} features in layer.`);
+      setAppStatus(`Feature deleted. ${data.features.length} features in layer.`);
       await loadDatasets();
     } catch (error) {
       setAppStatus(error.message, 'error');
@@ -547,27 +378,9 @@ function App() {
   };
 
   // Select a feature from the map or table and optionally zoom to it.
-  const selectFeature = (datasetId, featureId, shouldZoom = false, shouldToggle = false) => {
+  const selectFeature = (datasetId, featureId, shouldZoom = false) => {
     setActiveDatasetId(datasetId);
-    if (!featureId) {
-      setSelectedFeatureId(null);
-      setSelectedFeatureIds([]);
-      return;
-    }
-
-    if (shouldToggle && datasetId === activeDatasetId) {
-      setSelectedFeatureIds((current) => {
-        const alreadySelected = current.includes(featureId);
-        const nextSelection = alreadySelected
-          ? current.filter((id) => id !== featureId)
-          : [...current, featureId];
-        setSelectedFeatureId(alreadySelected ? nextSelection[nextSelection.length - 1] ?? null : featureId);
-        return nextSelection;
-      });
-    } else {
-      setSelectedFeatureId(featureId);
-      setSelectedFeatureIds([featureId]);
-    }
+    setSelectedFeatureId(featureId);
     if (shouldZoom) {
       setZoomRequest({ datasetId, featureId, nonce: Date.now() });
     }
@@ -577,50 +390,18 @@ function App() {
   const stageCreatedFeature = (datasetId, feature) => {
     setPendingEdit({ datasetId, kind: 'new', feature });
     setSelectedFeatureId(feature.clientId);
-    setSelectedFeatureIds([feature.clientId]);
     setAppStatus('New feature is pending. Fill attributes and click Save.');
   };
 
   // Stage geometry changes from Leaflet Draw instead of immediately changing the committed table rows.
   const stageUpdatedFeature = (datasetId, feature) => {
-    setPendingEdit((current) => {
-      if (current?.datasetId === datasetId && current.kind === 'split') {
-        return {
-          ...current,
-          features: current.features.map((item) => (item.clientId === feature.clientId ? feature : item)),
-        };
-      }
-      return {
-        datasetId,
-        kind: current?.datasetId === datasetId && current?.feature?.clientId === feature.clientId ? current.kind : 'update',
-        feature,
-      };
-    });
+    setPendingEdit((current) => ({
+      datasetId,
+      kind: current?.datasetId === datasetId && current.feature.clientId === feature.clientId ? current.kind : 'update',
+      feature,
+    }));
     setSelectedFeatureId(feature.clientId);
-    setSelectedFeatureIds([feature.clientId]);
     setAppStatus('Geometry edit is pending. Click Save to update the shapefile.');
-  };
-
-  // Stage polygon splits as removed source features plus new polygon pieces.
-  const stageSplitFeature = (datasetId, removedClientIds, features) => {
-    const removedIds = Array.isArray(removedClientIds) ? removedClientIds : [removedClientIds];
-    setPendingEdit((current) => {
-      if (current?.datasetId !== datasetId || current.kind !== 'split') {
-        return { datasetId, kind: 'split', removedClientIds: removedIds, features };
-      }
-
-      return {
-        ...current,
-        removedClientIds: [...new Set([...current.removedClientIds, ...removedIds])],
-        features: [
-          ...current.features.filter((feature) => !removedIds.includes(feature.clientId)),
-          ...features,
-        ],
-      };
-    });
-    setSelectedFeatureId(features[0]?.clientId ?? null);
-    setSelectedFeatureIds(features.map((feature) => feature.clientId));
-    setAppStatus(`${removedIds.length} polygon${removedIds.length === 1 ? '' : 's'} cut into ${features.length} separate features. Click Save to update the shapefile.`);
   };
 
   // Store a per-layer display color without touching the saved geometry.
@@ -653,7 +434,6 @@ function App() {
     setActiveDatasetId(nextVisible ? datasetId : activeDatasetId === datasetId ? null : activeDatasetId);
     if (!nextVisible && activeDatasetId === datasetId) {
       setSelectedFeatureId(null);
-      setSelectedFeatureIds([]);
     }
   };
 
@@ -691,7 +471,6 @@ function App() {
     preserveCurrentMapView();
     if (activeDatasetId === datasetId) {
       setSelectedFeatureId(null);
-      setSelectedFeatureIds([]);
       setAppStatus('Selection cleared');
     }
   };
@@ -720,7 +499,6 @@ function App() {
       if (activeDatasetId === datasetId) setActiveDatasetId(null);
       if (editingDatasetId === datasetId) setEditingDatasetId(null);
       setSelectedFeatureId(null);
-      setSelectedFeatureIds([]);
       setAppStatus('Layer deleted');
     } catch (error) {
       setAppStatus(error.message, 'error');
@@ -801,7 +579,7 @@ function App() {
                   <button type="button" onClick={() => zoomToLayer(dataset.id)} disabled={isBusy} title="Zoom to layer">
                     <LocateFixed size={16} aria-hidden="true" />
                   </button>
-                  <button type="button" onClick={() => clearLayerSelection(dataset.id)} disabled={activeDatasetId !== dataset.id || selectedFeatureIds.length === 0} title="Clear selection">
+                  <button type="button" onClick={() => clearLayerSelection(dataset.id)} disabled={activeDatasetId !== dataset.id || !selectedFeatureId} title="Clear selection">
                     <MousePointer2 size={16} aria-hidden="true" />
                   </button>
                   <button type="button" className="delete-layer" onClick={() => deleteLayer(dataset.id)} disabled={isBusy} title="Delete layer">
@@ -840,33 +618,24 @@ function App() {
             activeDatasetId={activeDatasetId}
             editingDatasetId={editingDatasetId}
             selectedFeatureId={selectedFeatureId}
-            selectedFeatureIds={selectedFeatureIds}
             zoomRequest={zoomRequest}
             layerZoomRequest={layerZoomRequest}
             pendingEdit={pendingEdit}
             onSelect={selectFeature}
             onPendingCreate={stageCreatedFeature}
             onPendingUpdate={stageUpdatedFeature}
-            onPendingSplit={stageSplitFeature}
             onDeleteSelected={removeSelectedFeature}
             onRegisterPreserveMapView={(capture) => {
               preserveMapViewRef.current = capture;
-            }}
-            onRegisterFlushEditableFeature={(flush) => {
-              flushEditableFeatureRef.current = flush;
             }}
           />
         </div>
 
         <AttributePanel
           feature={selectedFeature}
-          selectedFeatureCount={selectedFeatureIds.length}
           canEdit={Boolean(activeDatasetId && editingDatasetId === activeDatasetId)}
           isBusy={isBusy}
           onChange={updateFeatureProperties}
-          onAddField={addLayerField}
-          onRenameField={renameLayerField}
-          onRemoveField={removeLayerField}
           onSave={saveSelectedFeature}
           onDelete={removeSelectedFeature}
         />
@@ -885,9 +654,8 @@ function App() {
         <AttributeTable
           layer={activeLayer}
           selectedFeatureId={selectedFeatureId}
-          selectedFeatureIds={selectedFeatureIds}
           isCollapsed={attributeTableCollapsed}
-          onRowClick={(featureId, shouldToggle) => activeDatasetId && selectFeature(activeDatasetId, featureId, !shouldToggle, shouldToggle)}
+          onRowClick={(featureId) => activeDatasetId && selectFeature(activeDatasetId, featureId, true)}
         />
       </section>
       {stopEditingPrompt && (
@@ -900,7 +668,6 @@ function App() {
           onCancel={() => setStopEditingPrompt(null)}
         />
       )}
-      {showWelcome && <WelcomeDialog onClose={closeWelcome} />}
     </main>
   );
 }
@@ -960,29 +727,20 @@ function MapEditor({
   activeDatasetId,
   editingDatasetId,
   selectedFeatureId,
-  selectedFeatureIds,
   zoomRequest,
   layerZoomRequest,
   pendingEdit,
   onSelect,
   onPendingCreate,
   onPendingUpdate,
-  onPendingSplit,
   onDeleteSelected,
   onRegisterPreserveMapView,
-  onRegisterFlushEditableFeature,
 }) {
   const mapRef = useRef(null);
   const viewGroupRef = useRef(null);
   const editGroupRef = useRef(null);
   const drawControlRef = useRef(null);
-  const pointCreateControlRef = useRef(null);
   const deleteControlRef = useRef(null);
-  const polygonAdvancedControlRef = useRef(null);
-  const moveControlRef = useRef(null);
-  const moveStateRef = useRef({ active: false });
-  const polygonToolModeRef = useRef(null);
-  const activeCustomDrawRef = useRef(null);
   const baseLayerRef = useRef(null);
   const currentBasemapRef = useRef('streets');
   const lastViewRef = useRef(null);
@@ -995,36 +753,20 @@ function MapEditor({
   const latestRef = useRef({
     editingDatasetId,
     selectedFeatureId,
-    selectedFeatureIds,
     layersById,
-    pendingEdit,
     onPendingCreate,
     onPendingUpdate,
-    onPendingSplit,
     onDeleteSelected,
   });
 
   latestRef.current = {
     editingDatasetId,
     selectedFeatureId,
-    selectedFeatureIds,
     layersById,
-    pendingEdit,
     onPendingCreate,
     onPendingUpdate,
-    onPendingSplit,
     onDeleteSelected,
   };
-
-  // Let Save read the live selected editable geometry before it sends data to the backend.
-  useEffect(() => {
-    onRegisterFlushEditableFeature(() => {
-      const editGroup = editGroupRef.current;
-      if (!editGroup) return null;
-      return readFeaturesFromLayerGroup(editGroup)[0] ?? null;
-    });
-    return () => onRegisterFlushEditableFeature(() => null);
-  }, [onRegisterFlushEditableFeature]);
 
   // Create the Leaflet map, base tiles, and two layer groups: view-only and selected-edit.
   useEffect(() => {
@@ -1117,46 +859,6 @@ function MapEditor({
       if (!datasetId) return;
       const layer = event.layer;
       const feature = layer.toGeoJSON();
-
-      if (polygonToolModeRef.current === 'autoComplete') {
-        polygonToolModeRef.current = null;
-        activeCustomDrawRef.current = null;
-        const completedFeature = autoCompletePolygonFeature(
-          feature,
-          latestRef.current.layersById[datasetId]?.features ?? [],
-        );
-        if (!completedFeature) return;
-        completedFeature.clientId = crypto.randomUUID();
-        completedFeature.id = null;
-        completedFeature.properties = createEmptyProperties(latestRef.current.layersById[datasetId]?.features ?? []);
-        latestRef.current.onPendingCreate(datasetId, completedFeature);
-        onSelect(datasetId, completedFeature.clientId);
-        return;
-      }
-
-      if (polygonToolModeRef.current === 'cut') {
-        polygonToolModeRef.current = null;
-        activeCustomDrawRef.current = null;
-        const selectedFeatureIdsForCut = latestRef.current.selectedFeatureIds?.length
-          ? latestRef.current.selectedFeatureIds
-          : [latestRef.current.selectedFeatureId].filter(Boolean);
-        const layerFeatures = latestRef.current.layersById[datasetId]?.features ?? [];
-        const cutResults = selectedFeatureIdsForCut
-          .map((featureId) => findLayerFeature(layerFeatures, featureId, latestRef.current.pendingEdit))
-          .filter(isPolygonFeature)
-          .map((selectedFeature) => ({
-            removedClientId: selectedFeature.clientId,
-            features: cutSelectedPolygonFeatures(selectedFeature, feature),
-          }))
-          .filter((result) => result.features.length > 0);
-        if (!cutResults.length) return;
-        const removedClientIds = cutResults.map((result) => result.removedClientId);
-        const cutFeatures = cutResults.flatMap((result) => result.features);
-        latestRef.current.onPendingSplit(datasetId, removedClientIds, cutFeatures);
-        onSelect(datasetId, cutFeatures[0].clientId);
-        return;
-      }
-
       feature.clientId = crypto.randomUUID();
       feature.id = null;
       feature.properties = createEmptyProperties(latestRef.current.layersById[datasetId]?.features ?? []);
@@ -1176,11 +878,6 @@ function MapEditor({
     map.on(L.Draw.Event.DELETED, () => {
       onSelect(latestRef.current.editingDatasetId, null);
     });
-
-    map.on(L.Draw.Event.DRAWSTOP, () => {
-      polygonToolModeRef.current = null;
-      activeCustomDrawRef.current = null;
-    });
   }, [onRegisterPreserveMapView, onSelect]);
 
   // Show the draw toolbar only while a shapefile layer is in editing mode.
@@ -1197,77 +894,33 @@ function MapEditor({
       map.removeControl(deleteControlRef.current);
       deleteControlRef.current = null;
     }
-    if (pointCreateControlRef.current) {
-      map.removeControl(pointCreateControlRef.current);
-      pointCreateControlRef.current = null;
-    }
-    if (polygonAdvancedControlRef.current) {
-      map.removeControl(polygonAdvancedControlRef.current);
-      polygonAdvancedControlRef.current = null;
-    }
-    if (moveControlRef.current) {
-      deactivateMoveFeature(map, moveStateRef);
-      map.removeControl(moveControlRef.current);
-      moveControlRef.current = null;
-    }
-    if (activeCustomDrawRef.current) {
-      activeCustomDrawRef.current.disable();
-      activeCustomDrawRef.current = null;
-    }
 
     if (!editingDatasetId) return;
 
     const editingLayer = layersById[editingDatasetId];
-    const editingFamily = geometryFamily(editingLayer?.geometryType);
-    if (editingFamily === 'point') {
-      const pointCreateControl = createPointCreateControl(map, activeCustomDrawRef);
-      pointCreateControlRef.current = pointCreateControl;
-      pointCreateControl.addTo(map);
-    } else {
-      const drawControl = new L.Control.Draw({
-        position: 'topleft',
-        draw: drawOptionsForGeometry(editingLayer?.geometryType),
-        edit: {
-          featureGroup: editGroup,
-          remove: false,
-        },
-      });
-      drawControlRef.current = drawControl;
-      map.addControl(drawControl);
-    }
-
-    if (editingFamily === 'polygon') {
-      const polygonAdvancedControl = createPolygonAdvancedControl(map, latestRef, polygonToolModeRef, activeCustomDrawRef);
-      polygonAdvancedControlRef.current = polygonAdvancedControl;
-      polygonAdvancedControl.addTo(map);
-    }
-
-    if (['point', 'line', 'polygon'].includes(editingFamily)) {
-      const moveControl = createMoveSelectedControl(map, editGroup, latestRef, moveStateRef);
-      moveControlRef.current = moveControl;
-      moveControl.addTo(map);
-    }
+    const drawControl = new L.Control.Draw({
+      position: 'topleft',
+      draw: drawOptionsForGeometry(editingLayer?.geometryType),
+      edit: {
+        featureGroup: editGroup,
+        remove: false,
+      },
+    });
+    drawControlRef.current = drawControl;
+    map.addControl(drawControl);
 
     const deleteControl = createDeleteSelectedControl(latestRef);
     deleteControlRef.current = deleteControl;
     deleteControl.addTo(map);
   }, [editingDatasetId, layersById]);
 
-  // Keep custom move/delete buttons enabled only when an editable feature is selected.
+  // Keep the custom delete button enabled only when an editable feature is selected.
   useEffect(() => {
-    const deleteButton = deleteControlRef.current?.getContainer()?.querySelector('button');
-    if (deleteButton) {
-      deleteButton.disabled = !(editingDatasetId && selectedFeatureIds.length > 0);
-      deleteButton.title = selectedFeatureIds.length > 0 ? 'Delete selected feature' : 'Select a feature to delete';
-    }
-
-    const moveButton = moveControlRef.current?.getContainer()?.querySelector('button');
-    if (moveButton) {
-      const family = geometryFamily(layersById[editingDatasetId]?.geometryType);
-      moveButton.disabled = !(editingDatasetId && selectedFeatureId && ['point', 'line', 'polygon'].includes(family));
-      moveButton.title = selectedFeatureId ? 'Move selected feature' : 'Select a feature to move';
-    }
-  }, [editingDatasetId, selectedFeatureId, selectedFeatureIds, layersById]);
+    const button = deleteControlRef.current?.getContainer()?.querySelector('button');
+    if (!button) return;
+    button.disabled = !(editingDatasetId && selectedFeatureId);
+    button.title = selectedFeatureId ? 'Delete selected feature' : 'Select a feature to delete';
+  }, [editingDatasetId, selectedFeatureId]);
 
   // Render loaded layers. The selected feature from the editing layer is the only editable Leaflet layer.
   useEffect(() => {
@@ -1284,18 +937,16 @@ function MapEditor({
       const layer = layersById[layerId];
       if (!layer?.loaded || !layer.visible) return;
       layer.features.forEach((feature) => {
-        if (pendingEdit?.datasetId === layer.id && pendingEdit.kind === 'split' && pendingEdit.removedClientIds.includes(feature.clientId)) return;
-        const pendingFeatureMatches = pendingEdit?.datasetId === layer.id && pendingEdit.feature?.clientId === feature.clientId;
+        const pendingFeatureMatches = pendingEdit?.datasetId === layer.id && pendingEdit.feature.clientId === feature.clientId;
         const featureToRender = pendingFeatureMatches ? pendingEdit.feature : feature;
-        const isSelected = selectedFeatureIds.includes(featureToRender.clientId);
         const isSelectedEditableFeature = layer.id === editingDatasetId && featureToRender.clientId === selectedFeatureId;
         const targetGroup = isSelectedEditableFeature ? editGroup : viewGroup;
         const geoLayer = L.geoJSON(featureToRender, {
-          style: () => featureStyle(layer.color, isSelected, layer.id === activeDatasetId),
-          pointToLayer: (_, latlng) => L.circleMarker(latlng, pointStyle(layer.color, isSelected)),
+          style: () => featureStyle(layer.color, featureToRender.clientId === selectedFeatureId, layer.id === activeDatasetId),
+          pointToLayer: (_, latlng) => L.circleMarker(latlng, pointStyle(layer.color, featureToRender.clientId === selectedFeatureId)),
           onEachFeature: (_, childLayer) => {
             childLayer.feature = featureToRender;
-            childLayer.on('click', (event) => onSelect(layer.id, featureToRender.clientId, false, isToggleSelectionEvent(event)));
+            childLayer.on('click', () => onSelect(layer.id, featureToRender.clientId));
           },
         });
         geoLayer.eachLayer((child) => targetGroup.addLayer(child));
@@ -1310,27 +961,10 @@ function MapEditor({
           pointToLayer: (_, latlng) => L.circleMarker(latlng, pointStyle(layer.color, true)),
           onEachFeature: (_, childLayer) => {
             childLayer.feature = pendingEdit.feature;
-            childLayer.on('click', (event) => onSelect(layer.id, pendingEdit.feature.clientId, false, isToggleSelectionEvent(event)));
+            childLayer.on('click', () => onSelect(layer.id, pendingEdit.feature.clientId));
           },
         });
         geoLayer.eachLayer((child) => editGroup.addLayer(child));
-      }
-    }
-
-    if (pendingEdit?.kind === 'split') {
-      const layer = layersById[pendingEdit.datasetId];
-      if (layer?.loaded && layer.visible) {
-        pendingEdit.features.forEach((feature) => {
-          const isSelected = selectedFeatureIds.includes(feature.clientId);
-          const geoLayer = L.geoJSON(feature, {
-            style: () => featureStyle(layer.color, isSelected, true),
-            onEachFeature: (_, childLayer) => {
-              childLayer.feature = feature;
-              childLayer.on('click', (event) => onSelect(layer.id, feature.clientId, false, isToggleSelectionEvent(event)));
-            },
-          });
-          geoLayer.eachLayer((child) => (feature.clientId === selectedFeatureId ? editGroup : viewGroup).addLayer(child));
-        });
       }
     }
 
@@ -1340,7 +974,7 @@ function MapEditor({
       restoreMapView(map, previousView, skipViewHistoryRef);
       forcedViewRef.current = null;
     }
-  }, [layersById, layerOrder, activeDatasetId, editingDatasetId, selectedFeatureId, selectedFeatureIds, pendingEdit, onSelect]);
+  }, [layersById, layerOrder, activeDatasetId, editingDatasetId, selectedFeatureId, pendingEdit, onSelect]);
 
   // Zoom to a row-selected feature from the bottom attribute table.
   useEffect(() => {
@@ -1407,71 +1041,24 @@ function StopEditingDialog({ layerName, nextLayerName, isBusy, onSave, onDiscard
   );
 }
 
-// WelcomeDialog explains the editor workflow the first time a user opens the app.
-function WelcomeDialog({ onClose }) {
-  return (
-    <div className="modal-backdrop welcome-backdrop" role="presentation">
-      <section className="welcome-dialog" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
-        <button type="button" className="welcome-close" onClick={onClose} aria-label="Close welcome window">x</button>
-        <h2 id="welcome-title">GIS Editing App</h2>
-        <p>
-          Upload zipped shapefiles, inspect their geometry and attributes, edit vector features, then download the updated shapefile.
-        </p>
-        <div className="welcome-grid">
-          <article>
-            <strong>1. Upload layers</strong>
-            <span>Choose a ZIP containing shapefile parts. Each shapefile appears as a layer in the left panel.</span>
-          </article>
-          <article>
-            <strong>2. Turn on visibility</strong>
-            <span>Use the eye button to show a layer. The map, right attribute panel, and bottom table stay connected.</span>
-          </article>
-          <article>
-            <strong>3. Start editing</strong>
-            <span>Click the edit button for one layer. Other layers remain view-only while the active layer is edited.</span>
-          </article>
-          <article>
-            <strong>4. Save and download</strong>
-            <span>Draw, move, cut, delete, or update attributes. Click Save, then Download to export the edited shapefile.</span>
-          </article>
-        </div>
-        <button type="button" className="welcome-primary" onClick={onClose}>Start editing</button>
-      </section>
-    </div>
-  );
-}
-
 // AttributePanel shows the selected feature's properties and only unlocks inputs during edit mode.
-function AttributePanel({ feature, selectedFeatureCount, canEdit, isBusy, onChange, onAddField, onRenameField, onRemoveField, onSave, onDelete }) {
+function AttributePanel({ feature, canEdit, isBusy, onChange, onSave, onDelete }) {
   const properties = feature?.properties ?? {};
-  const [fieldToRemove, setFieldToRemove] = useState(null);
 
-  // Write an edited attribute value into every selected feature.
-  const updateValue = (key, value) => onChange(key, value);
+  // Write an edited attribute value into React state.
+  const updateValue = (key, value) => onChange({ ...properties, [key]: value });
 
-  // Ask the layer-level schema handler to remove this column from every feature.
+  // Remove an attribute field from the selected feature.
   const removeField = (key) => {
-    onRemoveField(key);
-    setFieldToRemove(null);
+    const next = { ...properties };
+    delete next[key];
+    onChange(next);
   };
 
   if (!feature) {
     return (
-      <aside className={`attribute-panel empty ${canEdit ? 'editing' : ''}`}>
-        <div className="panel-header">
-          <h2>Attribute</h2>
-          {canEdit && (
-            <div className="panel-actions two-option">
-              <button type="button" className="save-feature" onClick={onSave} disabled={isBusy}>
-                <Save size={16} aria-hidden="true" />
-                Save
-              </button>
-              <button type="button" className="delete-feature" onClick={onDelete} disabled={isBusy} title="Delete selected feature">
-                Delete
-              </button>
-            </div>
-          )}
-        </div>
+      <aside className="attribute-panel empty">
+        <h2>Attributes</h2>
         <p>Select a map feature or an attribute table row.</p>
       </aside>
     );
@@ -1480,73 +1067,35 @@ function AttributePanel({ feature, selectedFeatureCount, canEdit, isBusy, onChan
   return (
     <aside className="attribute-panel">
       <div className="panel-header">
-        <h2>Attribute</h2>
-        {selectedFeatureCount > 1 && (
-          <p className="selection-note">
-            {selectedFeatureCount} features selected. Showing last selected feature attributes; edits apply to all selected features.
-          </p>
-        )}
-        {canEdit && (
-          <div className="panel-actions">
-            <button type="button" className="save-feature" onClick={onSave} disabled={isBusy}>
-              <Save size={16} aria-hidden="true" />
-              Save
-            </button>
-            <button type="button" className="delete-feature" onClick={onDelete} disabled={isBusy} title="Delete selected feature">
-              Delete
-            </button>
-            <button
-              type="button"
-              className="add-field compact"
-              disabled={isBusy}
-              onClick={onAddField}
-            >
-              Add field
-            </button>
-          </div>
-        )}
+        <h2>Attributes</h2>
+        <div className="panel-actions">
+          <button type="button" className="save-feature" onClick={onSave} disabled={!canEdit || isBusy}>
+            <Save size={16} aria-hidden="true" />
+            Save
+          </button>
+          <button type="button" className="delete-feature" onClick={onDelete} disabled={!canEdit || isBusy} title="Delete selected feature">
+            Delete
+          </button>
+          <button
+            type="button"
+            className="add-field compact"
+            disabled={!canEdit || isBusy}
+            onClick={() => onChange({ ...properties, [`field_${Object.keys(properties).length + 1}`]: '' })}
+          >
+            Add field
+          </button>
+        </div>
       </div>
       <div className="field-list">
-        {Object.entries(properties).map(([key, value], index) => (
-          <div className="field-row" key={index}>
-            <input
-              defaultValue={key}
-              disabled={!canEdit}
-              onBlur={(event) => onRenameField(key, event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') event.currentTarget.blur();
-              }}
-              aria-label="Field name"
-            />
+        {Object.entries(properties).map(([key, value]) => (
+          <div className="field-row" key={key}>
+            <input value={key} disabled aria-label="Field name" />
             <input value={value ?? ''} disabled={!canEdit} onChange={(event) => updateValue(key, event.target.value)} aria-label="Field value" />
-            <button type="button" onClick={() => setFieldToRemove(key)} disabled={!canEdit} title="Remove field">x</button>
+            <button type="button" onClick={() => removeField(key)} disabled={!canEdit} title="Remove field">x</button>
           </div>
         ))}
       </div>
-      {fieldToRemove !== null && (
-        <ConfirmRemoveFieldDialog
-          fieldName={fieldToRemove}
-          onConfirm={() => removeField(fieldToRemove)}
-          onCancel={() => setFieldToRemove(null)}
-        />
-      )}
     </aside>
-  );
-}
-
-// Confirm field removal because deleting an attribute column changes the selected feature immediately.
-function ConfirmRemoveFieldDialog({ fieldName, onConfirm, onCancel }) {
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-field-title">
-        <h2 id="remove-field-title">Remove field?</h2>
-        <p>{`Remove "${fieldName}" from this feature's attributes?`}</p>
-        <div className="confirm-actions two-option">
-          <button type="button" className="delete-feature" onClick={onConfirm}>Yes</button>
-          <button type="button" onClick={onCancel}>No</button>
-        </div>
-      </section>
-    </div>
   );
 }
 
@@ -1588,7 +1137,7 @@ function BottomBarHandle({ isCollapsed, onToggleCollapse, onResize, onResizeStar
 }
 
 // AttributeTable mirrors the loaded shapefile attribute table and drives map selection/zoom.
-function AttributeTable({ layer, selectedFeatureId, selectedFeatureIds, isCollapsed, onRowClick }) {
+function AttributeTable({ layer, selectedFeatureId, isCollapsed, onRowClick }) {
   const rowRefs = useRef({});
   const fields = useMemo(() => {
     const names = new Set();
@@ -1597,15 +1146,6 @@ function AttributeTable({ layer, selectedFeatureId, selectedFeatureIds, isCollap
     });
     return [...names];
   }, [layer]);
-  const orderedFeatures = useMemo(() => {
-    if (!layer) return [];
-    if (selectedFeatureIds.length === 0) return layer.features;
-    const selectedIds = new Set(selectedFeatureIds);
-    return [
-      ...layer.features.filter((feature) => selectedIds.has(feature.clientId)),
-      ...layer.features.filter((feature) => !selectedIds.has(feature.clientId)),
-    ];
-  }, [layer, selectedFeatureIds]);
 
   // Keep the selected map feature visible in the bottom table.
   useEffect(() => {
@@ -1618,7 +1158,7 @@ function AttributeTable({ layer, selectedFeatureId, selectedFeatureIds, isCollap
     <section className={`attribute-table ${isCollapsed ? 'collapsed' : ''}`} aria-label="Attribute table">
       <header>
         <strong>{layer?.name ?? 'Attribute table'}</strong>
-        <span>{selectedFeatureIds.length} selected out of {layer?.features.length ?? 0} rows</span>
+        <span>{layer?.features.length ?? 0} rows</span>
       </header>
       <div className="table-scroll">
         {!layer ? (
@@ -1629,19 +1169,19 @@ function AttributeTable({ layer, selectedFeatureId, selectedFeatureIds, isCollap
           <table>
             <thead>
               <tr>
-                <th>No.</th>
+                <th>#</th>
                 {fields.map((field) => <th key={field}>{field}</th>)}
               </tr>
             </thead>
             <tbody>
-              {orderedFeatures.map((feature, index) => (
+              {layer.features.map((feature, index) => (
                 <tr
                   ref={(node) => {
                     if (node) rowRefs.current[feature.clientId] = node;
                   }}
                   key={feature.clientId}
-                  className={selectedFeatureIds.includes(feature.clientId) ? 'selected' : ''}
-                  onClick={(event) => onRowClick(feature.clientId, event.ctrlKey || event.shiftKey)}
+                  className={feature.clientId === selectedFeatureId ? 'selected' : ''}
+                  onClick={() => onRowClick(feature.clientId)}
                 >
                   <td>{index + 1}</td>
                   {fields.map((field) => <td key={field}>{formatCell(feature.properties?.[field])}</td>)}
@@ -1689,146 +1229,9 @@ function clamp(value, min, max) {
 function applyPendingEdit(features, pendingEdit) {
   if (!pendingEdit) return features;
   if (pendingEdit.kind === 'new') return [...features, pendingEdit.feature];
-  if (pendingEdit.kind === 'split') {
-    return [
-      ...features.filter((feature) => !pendingEdit.removedClientIds.includes(feature.clientId)),
-      ...pendingEdit.features,
-    ];
-  }
   return features.map((feature) =>
     feature.clientId === pendingEdit.feature.clientId ? pendingEdit.feature : feature,
   );
-}
-
-// Generate a new layer-wide field name that does not collide with existing attribute columns.
-function nextLayerFieldName(features) {
-  const names = new Set();
-  features.forEach((feature) => {
-    Object.keys(feature.properties ?? {}).forEach((key) => names.add(key));
-  });
-
-  let index = names.size + 1;
-  let candidate = `field_${index}`;
-  while (names.has(candidate)) {
-    index += 1;
-    candidate = `field_${index}`;
-  }
-  return candidate;
-}
-
-// Check whether any feature already has this attribute column name.
-function layerHasField(features, fieldName) {
-  return features.some((feature) => Object.prototype.hasOwnProperty.call(feature.properties ?? {}, fieldName));
-}
-
-// Rename one attribute key while preserving object order and the existing value.
-function renamePropertyKey(properties, oldKey, newKey) {
-  const next = {};
-  Object.entries(properties).forEach(([key, value]) => {
-    next[key === oldKey ? newKey : key] = value;
-  });
-  return next;
-}
-
-// Find the selected feature, preferring the current pending geometry if one exists.
-function findLayerFeature(features, featureId, pendingEdit) {
-  if (!featureId) return null;
-  if (pendingEdit?.feature?.clientId === featureId) return pendingEdit.feature;
-  if (pendingEdit?.kind === 'split') {
-    return pendingEdit.features.find((feature) => feature.clientId === featureId) ?? null;
-  }
-  return features.find((feature) => feature.clientId === featureId) ?? null;
-}
-
-// Remove unsaved draft features from the current pending edit without touching saved database rows.
-function removePendingFeatures(pendingEdit, clientIds) {
-  if (!pendingEdit) return pendingEdit;
-  if (pendingEdit.kind === 'split') {
-    const nextFeatures = pendingEdit.features.filter((feature) => !clientIds.includes(feature.clientId));
-    return nextFeatures.length > 0 ? { ...pendingEdit, features: nextFeatures } : null;
-  }
-  return clientIds.includes(pendingEdit.feature?.clientId) ? null : pendingEdit;
-}
-
-// Leaflet wraps the browser click event; Ctrl and Shift both mean "toggle this feature in selection".
-function isToggleSelectionEvent(event) {
-  const originalEvent = event?.originalEvent;
-  return Boolean(originalEvent?.ctrlKey || originalEvent?.shiftKey);
-}
-
-// Auto-complete creates a new polygon from the drawn area after removing existing layer polygons.
-function autoCompletePolygonFeature(drawnFeature, existingFeatures) {
-  if (!isPolygonFeature(drawnFeature)) return null;
-  const existingPolygons = existingFeatures.filter(isPolygonFeature).map(cleanFeatureForTurf);
-  const drawnPolygon = cleanFeatureForTurf(drawnFeature);
-
-  if (existingPolygons.length === 0) {
-    return drawnPolygon;
-  }
-
-  try {
-    const existingUnion = turf.union(turf.featureCollection(existingPolygons));
-    if (!existingUnion) return drawnPolygon;
-    const completed = turf.difference(turf.featureCollection([drawnPolygon, existingUnion]));
-    return completed && isPolygonFeature(completed) ? completed : null;
-  } catch {
-    return drawnPolygon;
-  }
-}
-
-// Cut selected polygon by subtracting a very narrow buffer around the drawn cut line.
-function cutSelectedPolygonFeatures(selectedFeature, cutLineFeature) {
-  if (!selectedFeature || !isPolygonFeature(selectedFeature)) return [];
-
-  try {
-    const cutBuffer = turf.buffer(cleanFeatureForTurf(cutLineFeature), 0.15, { units: 'meters' });
-    const cutResult = turf.difference(turf.featureCollection([cleanFeatureForTurf(selectedFeature), cutBuffer]));
-    if (!cutResult || !isPolygonFeature(cutResult)) return [];
-    const parts = explodePolygonParts(cutResult);
-    if (parts.length < 2) return [];
-    return parts.map((part) => ({
-      ...part,
-      id: null,
-      clientId: crypto.randomUUID(),
-      properties: { ...(selectedFeature.properties ?? {}) },
-    }));
-  } catch {
-    return [];
-  }
-}
-
-// Convert a cut Polygon/MultiPolygon result into separate polygon features and table rows.
-function explodePolygonParts(feature) {
-  if (feature.geometry.type === 'Polygon') {
-    return [feature];
-  }
-
-  if (feature.geometry.type !== 'MultiPolygon') {
-    return [];
-  }
-
-  return feature.geometry.coordinates.map((coordinates) => ({
-    type: 'Feature',
-    geometry: {
-      type: 'Polygon',
-      coordinates,
-    },
-    properties: {},
-  }));
-}
-
-// Keep Turf inputs free of app-only ids and stale properties.
-function cleanFeatureForTurf(feature) {
-  return {
-    type: 'Feature',
-    geometry: feature.geometry,
-    properties: {},
-  };
-}
-
-// Accept both Polygon and MultiPolygon because shapefile polygon layers can contain multipart polygons.
-function isPolygonFeature(feature) {
-  return feature?.geometry?.type === 'Polygon' || feature?.geometry?.type === 'MultiPolygon';
 }
 
 // Restrict Leaflet Draw tools to the current shapefile geometry family.
@@ -1839,255 +1242,9 @@ function drawOptionsForGeometry(geometryType = '') {
     circlemarker: false,
     marker: family === 'point',
     polyline: family === 'line',
-    polygon: family === 'polygon' ? { allowIntersection: true, showArea: true } : false,
+    polygon: family === 'polygon' ? { allowIntersection: false, showArea: true } : false,
     rectangle: family === 'polygon',
   };
-}
-
-// Drag the selected point feature with app-owned logic so Save receives the moved coordinates.
-function enablePointDrag(layer, datasetId, latestRef) {
-  layer.on('mousedown', (event) => {
-    L.DomEvent.stop(event);
-    const map = layer._map;
-    if (!map) return;
-    map.dragging.disable();
-    map.getContainer().classList.add('moving-feature');
-
-    const move = (moveEvent) => {
-      layer.setLatLng(moveEvent.latlng);
-    };
-
-    const finish = () => {
-      map.off('mousemove', move);
-      map.off('mouseup', finish);
-      document.removeEventListener('mouseup', finish);
-      map.dragging.enable();
-      map.getContainer().classList.remove('moving-feature');
-      const existing = layer.feature ?? {};
-      const movedFeature = layer.toGeoJSON();
-      latestRef.current.onPendingUpdate(datasetId, {
-        ...movedFeature,
-        id: existing.id ?? null,
-        clientId: existing.clientId ?? latestRef.current.selectedFeatureId,
-        properties: existing.properties ?? {},
-      });
-    };
-
-    map.on('mousemove', move);
-    map.on('mouseup', finish);
-    document.addEventListener('mouseup', finish, { once: true });
-  });
-}
-
-// Create a custom point tool instead of showing Leaflet Draw's full point edit toolbar.
-function createPointCreateControl(map, activeCustomDrawRef) {
-  const PointCreateControl = L.Control.extend({
-    options: { position: 'topleft' },
-    onAdd: () => {
-      const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control custom-point-control');
-      const button = L.DomUtil.create('button', '', container);
-      button.type = 'button';
-      button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12Z"/><circle cx="12" cy="9" r="2.4"/></svg>';
-      button.setAttribute('aria-label', 'Create point');
-      button.title = 'Create point';
-      L.DomEvent.disableClickPropagation(container);
-      L.DomEvent.on(button, 'click', (event) => {
-        L.DomEvent.stop(event);
-        if (activeCustomDrawRef.current) activeCustomDrawRef.current.disable();
-        activeCustomDrawRef.current = new L.Draw.Marker(map);
-        activeCustomDrawRef.current.enable();
-      });
-      return container;
-    },
-  });
-  return new PointCreateControl();
-}
-
-// Create polygon-specific GIS construction tools that Leaflet Draw does not provide out of the box.
-function createPolygonAdvancedControl(map, latestRef, polygonToolModeRef, activeCustomDrawRef) {
-  const PolygonAdvancedControl = L.Control.extend({
-    options: { position: 'topleft' },
-    onAdd: () => {
-      const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control polygon-advanced-control');
-      const autoCompleteButton = L.DomUtil.create('button', '', container);
-      const cutButton = L.DomUtil.create('button', '', container);
-
-      autoCompleteButton.type = 'button';
-      autoCompleteButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" class="autocomplete-icon"><path d="M6.5 8.5 12.5 4.5 18.5 8.5 16.5 17.5 8.5 17.5Z"/><circle cx="6.5" cy="8.5" r="2.6"/><circle cx="12.5" cy="4.5" r="2.6"/><circle cx="18.5" cy="8.5" r="2.6"/><circle cx="16.5" cy="17.5" r="2.6"/><circle cx="8.5" cy="17.5" r="2.6"/></svg>';
-      autoCompleteButton.setAttribute('aria-label', 'Auto complete polygon');
-      autoCompleteButton.title = 'Auto complete polygon';
-
-      cutButton.type = 'button';
-      cutButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" class="cut-polygon-icon"><rect x="5" y="7" width="14" height="12"/><path d="M12 3v18"/></svg>';
-      cutButton.setAttribute('aria-label', 'Cut selected polygon');
-      cutButton.title = 'Cut selected polygon';
-
-      L.DomEvent.disableClickPropagation(container);
-      L.DomEvent.on(autoCompleteButton, 'click', (event) => {
-        L.DomEvent.stop(event);
-        startCustomPolygonDraw(map, polygonToolModeRef, activeCustomDrawRef, 'autoComplete');
-      });
-      L.DomEvent.on(cutButton, 'click', (event) => {
-        L.DomEvent.stop(event);
-        if (!latestRef.current.selectedFeatureId) return;
-        startCustomCutDraw(map, polygonToolModeRef, activeCustomDrawRef);
-      });
-      return container;
-    },
-  });
-  return new PolygonAdvancedControl();
-}
-
-// Create a whole-feature move tool for selected line and polygon features.
-function createMoveSelectedControl(map, editGroup, latestRef, moveStateRef) {
-  const MoveControl = L.Control.extend({
-    options: { position: 'topleft' },
-    onAdd: () => {
-      const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control custom-move-control');
-      const button = L.DomUtil.create('button', '', container);
-      button.type = 'button';
-      button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20"/><path d="M2 12h20"/><path d="m8 6 4-4 4 4"/><path d="m8 18 4 4 4-4"/><path d="m6 8-4 4 4 4"/><path d="m18 8 4 4-4 4"/></svg>';
-      button.setAttribute('aria-label', 'Move selected feature');
-      button.title = 'Select a line or polygon to move';
-      button.disabled = true;
-      L.DomEvent.disableClickPropagation(container);
-      L.DomEvent.on(button, 'click', (event) => {
-        L.DomEvent.stop(event);
-        if (moveStateRef.current.active) {
-          deactivateMoveFeature(map, moveStateRef);
-          return;
-        }
-        activateMoveFeature(map, editGroup, latestRef, moveStateRef, button);
-      });
-      return container;
-    },
-  });
-  return new MoveControl();
-}
-
-// Enable dragging the currently selected Leaflet path as a whole feature.
-function activateMoveFeature(map, editGroup, latestRef, moveStateRef, button) {
-  const selectedLayer = findEditableLeafletLayer(editGroup, latestRef.current.selectedFeatureId);
-  if (!selectedLayer) return;
-
-  deactivateMoveFeature(map, moveStateRef);
-  moveStateRef.current = {
-    active: true,
-    button,
-    layer: selectedLayer,
-    latestRef,
-  };
-  button.classList.add('active');
-  map.getContainer().classList.add('moving-feature');
-
-  const startMove = (event) => {
-    L.DomEvent.stop(event);
-    moveStateRef.current.moving = true;
-    moveStateRef.current.lastLatLng = event.latlng;
-    map.dragging.disable();
-
-    const move = (moveEvent) => {
-      const state = moveStateRef.current;
-      if (!state.moving || !state.layer || !state.lastLatLng) return;
-      const deltaLat = moveEvent.latlng.lat - state.lastLatLng.lat;
-      const deltaLng = moveEvent.latlng.lng - state.lastLatLng.lng;
-      if (typeof state.layer.setLatLng === 'function' && typeof state.layer.getLatLng === 'function') {
-        const currentLatLng = state.layer.getLatLng();
-        state.layer.setLatLng(L.latLng(currentLatLng.lat + deltaLat, currentLatLng.lng + deltaLng));
-      } else {
-        state.layer.setLatLngs(translateLatLngs(state.layer.getLatLngs(), deltaLat, deltaLng));
-      }
-      state.lastLatLng = moveEvent.latlng;
-    };
-
-    const finish = () => {
-      const state = moveStateRef.current;
-      map.off('mousemove', move);
-      map.off('mouseup', finish);
-      document.removeEventListener('mouseup', finish);
-      map.dragging.enable();
-      if (!state.layer) return;
-      commitMovedLayer(state.layer, latestRef);
-      state.moving = false;
-      state.lastLatLng = null;
-    };
-
-    map.on('mousemove', move);
-    map.on('mouseup', finish);
-    document.addEventListener('mouseup', finish, { once: true });
-  };
-
-  selectedLayer.on('mousedown', startMove);
-  moveStateRef.current.startMove = startMove;
-}
-
-// Turn off whole-feature movement and remove temporary handlers/classes.
-function deactivateMoveFeature(map, moveStateRef) {
-  const state = moveStateRef.current;
-  if (state.layer && state.startMove) {
-    state.layer.off('mousedown', state.startMove);
-  }
-  if (state.layer && state.latestRef) {
-    commitMovedLayer(state.layer, state.latestRef);
-  }
-  if (state.button) {
-    state.button.classList.remove('active');
-  }
-  map.getContainer().classList.remove('moving-feature');
-  moveStateRef.current = { active: false };
-}
-
-// Store the currently dragged Leaflet path as a pending geometry edit before Save reads state.
-function commitMovedLayer(layer, latestRef) {
-  const existing = layer.feature ?? {};
-  const feature = layer.toGeoJSON();
-  latestRef.current.onPendingUpdate(latestRef.current.editingDatasetId, {
-    ...feature,
-    id: existing.id ?? null,
-    clientId: existing.clientId ?? latestRef.current.selectedFeatureId,
-    properties: existing.properties ?? {},
-  });
-}
-
-// Find the selected editable path inside the edit feature group.
-function findEditableLeafletLayer(editGroup, selectedFeatureId) {
-  let selectedLayer = null;
-  editGroup.eachLayer((layer) => {
-    if (layer.feature?.clientId === selectedFeatureId) {
-      selectedLayer = layer;
-    }
-  });
-  return selectedLayer;
-}
-
-// Recursively translate line/polygon LatLng arrays while preserving their nested shape.
-function translateLatLngs(latLngs, deltaLat, deltaLng) {
-  return latLngs.map((item) => {
-    if (Array.isArray(item)) return translateLatLngs(item, deltaLat, deltaLng);
-    return L.latLng(item.lat + deltaLat, item.lng + deltaLng);
-  });
-}
-
-// Start a custom polygon draw mode and let the global CREATED handler process the result.
-function startCustomPolygonDraw(map, polygonToolModeRef, activeCustomDrawRef, mode) {
-  if (activeCustomDrawRef.current) activeCustomDrawRef.current.disable();
-  polygonToolModeRef.current = mode;
-  activeCustomDrawRef.current = new L.Draw.Polygon(map, {
-    allowIntersection: true,
-    showArea: true,
-    shapeOptions: { color: '#f97316', weight: 3 },
-  });
-  activeCustomDrawRef.current.enable();
-}
-
-// Start a custom line draw mode for splitting the selected polygon.
-function startCustomCutDraw(map, polygonToolModeRef, activeCustomDrawRef) {
-  if (activeCustomDrawRef.current) activeCustomDrawRef.current.disable();
-  polygonToolModeRef.current = 'cut';
-  activeCustomDrawRef.current = new L.Draw.Polyline(map, {
-    shapeOptions: { color: '#b91c1c', weight: 3, dashArray: '6 4' },
-  });
-  activeCustomDrawRef.current.enable();
 }
 
 // Create a one-click map delete button without Leaflet Draw's Save/Cancel/Clear All delete mode.
@@ -2105,7 +1262,7 @@ function createDeleteSelectedControl(latestRef) {
       L.DomEvent.disableClickPropagation(container);
       L.DomEvent.on(button, 'click', (event) => {
         L.DomEvent.stop(event);
-        if ((latestRef.current.selectedFeatureIds?.length ?? 0) === 0) return;
+        if (!latestRef.current.selectedFeatureId) return;
         latestRef.current.onDeleteSelected();
       });
       return container;

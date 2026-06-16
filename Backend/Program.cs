@@ -45,7 +45,7 @@ app.MapGet("/", () => Results.Ok(new
     name = "GIS Editing App API",
     status = "running",
     datasets = "/api/datasets",
-    frontend = "http://127.0.0.1:5173"
+    frontend = "https://geoediting.netlify.app/"
 }));
 app.MapControllers();
 app.Run();

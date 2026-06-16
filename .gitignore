@@ -44,6 +44,10 @@ logs/
 tmp/
 temp/
 
+# Repository documentation excluded from GitHub push
+README.md
+README.*
+
 # Generated shapefile/export artifacts
 *.shp
 *.shx

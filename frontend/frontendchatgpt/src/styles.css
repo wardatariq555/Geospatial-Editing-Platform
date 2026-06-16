@@ -278,32 +278,15 @@ input:disabled {
   justify-content: center;
 }
 
-.attribute-panel.empty.editing {
-  justify-content: flex-start;
-}
-
 .panel-header {
   display: grid;
   gap: 10px;
-}
-
-.selection-note {
-  padding: 8px 10px;
-  border: 1px solid #b9d7cd;
-  border-radius: 6px;
-  background: #eef8f4;
-  color: #315c51;
-  line-height: 1.35;
 }
 
 .panel-actions {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
-}
-
-.panel-actions.two-option {
-  grid-template-columns: 1fr 1fr;
 }
 
 .panel-actions button,
@@ -482,10 +465,6 @@ input:disabled {
   gap: 10px;
 }
 
-.confirm-actions.two-option {
-  grid-template-columns: 1fr 1fr;
-}
-
 .confirm-actions button {
   min-height: 36px;
   border-radius: 6px;
@@ -495,86 +474,6 @@ input:disabled {
 .discard-editing {
   background: #fde8df;
   color: #852113;
-}
-
-.welcome-backdrop {
-  background: rgba(14, 23, 20, 0.5);
-}
-
-.welcome-dialog {
-  position: relative;
-  display: grid;
-  gap: 16px;
-  width: min(620px, 100%);
-  padding: 24px;
-  background: #ffffff;
-  border: 1px solid #b9d7cd;
-  border-radius: 8px;
-  box-shadow: 0 22px 52px rgba(15, 23, 42, 0.26);
-}
-
-.welcome-dialog h2,
-.welcome-dialog p {
-  margin: 0;
-}
-
-.welcome-dialog h2 {
-  color: #10231f;
-  font-size: 1.35rem;
-}
-
-.welcome-dialog p {
-  max-width: 56ch;
-  color: #42534e;
-  line-height: 1.55;
-}
-
-.welcome-close {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border-radius: 6px;
-  background: #fde8df;
-  color: #852113;
-  font-weight: 800;
-}
-
-.welcome-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.welcome-grid article {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid #d7e1dc;
-  border-radius: 8px;
-  background: #f6faf8;
-}
-
-.welcome-grid strong {
-  color: #183b34;
-}
-
-.welcome-grid span {
-  color: #526963;
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-
-.welcome-primary {
-  justify-self: start;
-  min-height: 38px;
-  padding: 0 18px;
-  border-radius: 6px;
-  background: #183b34;
-  color: #ffffff;
-  font-weight: 800;
 }
 
 .attribute-table header {
@@ -643,83 +542,11 @@ tbody tr.selected {
   background: #dff4ec;
 }
 
-.map .leaflet-top.leaflet-left {
-  top: 10px;
-  left: 10px;
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 0;
-  padding: 4px;
-  border: 2px solid #183b34;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.22);
-}
-
-.map .leaflet-top.leaflet-left .leaflet-control {
-  margin: 0;
-  border: 0;
-  box-shadow: none;
-}
-
-.map .leaflet-top.leaflet-left .leaflet-draw,
-.map .leaflet-top.leaflet-left .leaflet-draw-section {
-  display: flex;
-  align-items: center;
-  float: none;
-}
-
-.map .leaflet-top.leaflet-left .leaflet-bar,
-.map .leaflet-top.leaflet-left .leaflet-draw-section,
-.map .leaflet-top.leaflet-left .leaflet-draw-toolbar,
-.custom-point-control,
-.polygon-advanced-control {
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-}
-
-.map .leaflet-top.leaflet-left .leaflet-draw-toolbar {
-  float: none;
-  margin: 0;
-}
-
-.map .leaflet-top.leaflet-left .leaflet-draw-toolbar-top,
-.map .leaflet-top.leaflet-left .leaflet-draw-toolbar-notop {
-  margin-top: 0;
-}
-
-.map .leaflet-top.leaflet-left .leaflet-draw-draw-rectangle {
-  display: none;
-}
-
-.map .leaflet-top.leaflet-left a,
-.map .leaflet-top.leaflet-left button {
-  width: 34px;
-  height: 34px;
-  border-right: 1px solid #c9d7d1;
-  border-bottom: 0;
-  border-radius: 0;
-  background-color: #ffffff;
-  transition: background-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
-}
-
-.map .leaflet-top.leaflet-left .leaflet-control:last-child button,
-.map .leaflet-top.leaflet-left .leaflet-draw-toolbar a:last-child {
-  border-right: 0;
-}
-
 .leaflet-draw-toolbar a {
   background-image: url("leaflet-draw/dist/images/spritesheet.png");
 }
 
-.custom-delete-control button,
-.custom-point-control button,
-.polygon-advanced-control button,
-.custom-move-control button {
+.custom-delete-control button {
   display: grid;
   place-items: center;
   width: 34px;
@@ -732,19 +559,7 @@ tbody tr.selected {
   line-height: 0;
 }
 
-.custom-point-control button,
-.polygon-advanced-control button {
-  color: #183b34;
-}
-
-.custom-move-control button {
-  color: #183b34;
-}
-
-.custom-delete-control button svg,
-.custom-point-control button svg,
-.polygon-advanced-control button svg,
-.custom-move-control button svg {
+.custom-delete-control button svg {
   width: 17px;
   height: 17px;
   fill: none;
@@ -754,65 +569,14 @@ tbody tr.selected {
   stroke-width: 2;
 }
 
-.polygon-advanced-control button svg.autocomplete-icon {
-  width: 20px;
-  height: 20px;
-  fill: currentColor;
-}
-
-.polygon-advanced-control button svg.autocomplete-icon path {
-  fill: none;
-  stroke-width: 2.6;
-}
-
-.polygon-advanced-control button svg.autocomplete-icon circle {
-  stroke: none;
-}
-
-.polygon-advanced-control button svg.cut-polygon-icon {
-  width: 20px;
-  height: 20px;
-}
-
-.polygon-advanced-control button svg.cut-polygon-icon rect {
-  fill: #29abc0;
-  stroke: currentColor;
-  stroke-width: 1.7;
-}
-
-.polygon-advanced-control button svg.cut-polygon-icon path {
-  stroke-dasharray: 1.5 2;
-  stroke-width: 2;
-}
-
-.map .leaflet-top.leaflet-left .leaflet-draw-toolbar a:hover,
-.map .leaflet-top.leaflet-left .leaflet-draw-toolbar a:focus,
-.map .leaflet-top.leaflet-left .leaflet-draw-toolbar a.leaflet-draw-toolbar-button-enabled,
-.custom-point-control button:hover:not(:disabled),
-.custom-point-control button:focus-visible,
-.polygon-advanced-control button:hover:not(:disabled),
-.polygon-advanced-control button:focus-visible,
-.custom-move-control button:hover:not(:disabled),
-.custom-move-control button:focus-visible,
-.custom-move-control button.active {
-  background-color: #d7fff1;
-  box-shadow: inset 0 0 0 1px #64b8a5;
-}
-
 .custom-delete-control button:hover:not(:disabled) {
   background: #fde8df;
-  box-shadow: inset 0 0 0 1px #f0a18d;
 }
 
-.custom-delete-control button:disabled,
-.custom-move-control button:disabled {
+.custom-delete-control button:disabled {
   color: #9aa7a2;
   cursor: not-allowed;
   opacity: 0.62;
-}
-
-.map.moving-feature {
-  cursor: move;
 }
 
 .home-control button,
@@ -1024,9 +788,5 @@ tbody tr.selected {
   .attribute-table {
     left: 0;
     right: 0;
-  }
-
-  .welcome-grid {
-    grid-template-columns: 1fr;
   }
 }
