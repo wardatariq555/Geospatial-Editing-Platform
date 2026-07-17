@@ -1,28 +1,73 @@
 using Api.Models;
+using NetTopologySuite;
 using NetTopologySuite.Features;
+using NetTopologySuite.Geometries;
+using NetTopologySuite.IO.Converters;
 using NetTopologySuite.IO.Esri;
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
+using System.Xml.Linq;
 
 namespace Api.Services;
 
 public sealed class ShapefileService : IShapefileService
 {
-    private const int MaxFeaturesPerShapefile = 1000;
+    private const int MaxFeaturesPerDataset = 1000;
     private const string Wgs84ProjectionWkt =
         "GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";
+    private static readonly GeometryFactory Wgs84GeometryFactory = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326);
+    private static readonly JsonSerializerOptions GeoJsonOptions = CreateGeoJsonOptions();
     private enum DbfExportKind { Text, Integer, Number, Boolean, Date }
     private sealed record DbfFieldMapping(string SourceName, string DbfName, DbfExportKind Kind);
 
-    // Extract one uploaded ZIP and import every complete .shp/.shx/.dbf shapefile set inside it.
-    public async Task<IReadOnlyList<ShapefileImport>> ReadZipAsync(IFormFile file, CancellationToken cancellationToken)
+    // Route uploaded vector files by extension while preserving the original export format.
+    public async Task<IReadOnlyList<ShapefileImport>> ReadAsync(IFormFile file, CancellationToken cancellationToken)
     {
         if (file.Length == 0)
         {
             throw new InvalidOperationException("Uploaded file is empty.");
         }
 
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        return extension switch
+        {
+            ".zip" => await ReadShapefileZipAsync(file, cancellationToken),
+            ".geojson" or ".json" => await ReadGeoJsonAsync(file, "geojson", cancellationToken),
+            ".kml" => await ReadKmlAsync(file, "kml", cancellationToken),
+            ".kmz" => await ReadKmzAsync(file, cancellationToken),
+            _ => throw new InvalidOperationException("Upload a zipped shapefile, GeoJSON, KML, or KMZ file.")
+        };
+    }
+
+    // Export the edited dataset back to the same vector format that the user uploaded.
+    public Task<ExportResult> WriteAsync(
+        string datasetName,
+        string? projectionWkt,
+        string sourceFormat,
+        IReadOnlyList<SpatialFeature> features,
+        CancellationToken cancellationToken)
+    {
+        if (features.Count == 0)
+        {
+            throw new InvalidOperationException("Cannot export an empty dataset.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var format = sourceFormat.ToLowerInvariant();
+        return format switch
+        {
+            "geojson" => Task.FromResult(WriteGeoJson(datasetName, features)),
+            "kml" => Task.FromResult(WriteKml(datasetName, features)),
+            "kmz" => Task.FromResult(WriteKmz(datasetName, features)),
+            _ => Task.FromResult(WriteShapefileZip(datasetName, projectionWkt, features))
+        };
+    }
+
+    // Extract one uploaded ZIP and import every complete .shp/.shx/.dbf shapefile set inside it.
+    private static async Task<IReadOnlyList<ShapefileImport>> ReadShapefileZipAsync(IFormFile file, CancellationToken cancellationToken)
+    {
         var workDir = CreateWorkDirectory();
         try
         {
@@ -54,23 +99,20 @@ public sealed class ShapefileService : IShapefileService
                 var features = Shapefile.ReadAllFeatures(shpPath)
                     .Select(feature => new SpatialFeature
                     {
-                        Geometry = feature.Geometry,
+                        Geometry = NormalizeGeometry(feature.Geometry),
                         Properties = feature.Attributes.GetNames()
                             .ToDictionary(name => name, name => NormalizeAttribute(feature.Attributes[name]))
                     })
                     .ToList();
 
-                if (features.Count > MaxFeaturesPerShapefile)
-                {
-                    throw new InvalidOperationException(
-                        $"{Path.GetFileName(shpPath)} has {features.Count} features. Upload shapefiles with {MaxFeaturesPerShapefile} features or fewer.");
-                }
+                ValidateFeatureCount(Path.GetFileName(shpPath), features.Count);
 
                 if (features.Count > 0)
                 {
                     imports.Add(new ShapefileImport(
                         Path.GetFileNameWithoutExtension(shpPath),
                         ReadProjectionWkt(shpPath),
+                        "shp",
                         features));
                 }
             }
@@ -83,15 +125,82 @@ public sealed class ShapefileService : IShapefileService
         }
     }
 
-    // Write the current database features into a shapefile and return it as a zipped byte array.
-    public Task<byte[]> WriteZipAsync(string datasetName, string? projectionWkt, IReadOnlyList<SpatialFeature> features, CancellationToken cancellationToken)
+    // Read a GeoJSON FeatureCollection as one editable dataset.
+    private static async Task<IReadOnlyList<ShapefileImport>> ReadGeoJsonAsync(IFormFile file, string sourceFormat, CancellationToken cancellationToken)
     {
-        if (features.Count == 0)
-        {
-            throw new InvalidOperationException("Cannot export an empty dataset.");
-        }
+        await using var stream = file.OpenReadStream();
+        var featureCollection = await JsonSerializer.DeserializeAsync<FeatureCollection>(stream, GeoJsonOptions, cancellationToken)
+            ?? new FeatureCollection();
+        var features = featureCollection
+            .Where(feature => feature.Geometry is not null)
+            .Select(feature => new SpatialFeature
+            {
+                Geometry = NormalizeGeometry(feature.Geometry),
+                Properties = ToDictionary(feature.Attributes)
+            })
+            .ToList();
 
-        cancellationToken.ThrowIfCancellationRequested();
+        ValidateFeatureCount(file.FileName, features.Count);
+        return features.Count == 0
+            ? []
+            : [new ShapefileImport(Path.GetFileNameWithoutExtension(file.FileName), Wgs84ProjectionWkt, sourceFormat, features)];
+    }
+
+    // Read one KML document as one editable dataset.
+    private static async Task<IReadOnlyList<ShapefileImport>> ReadKmlAsync(IFormFile file, string sourceFormat, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        var document = await XDocument.LoadAsync(stream, LoadOptions.None, cancellationToken);
+        var features = ReadKmlFeatures(document).ToList();
+        ValidateFeatureCount(file.FileName, features.Count);
+        return features.Count == 0
+            ? []
+            : [new ShapefileImport(Path.GetFileNameWithoutExtension(file.FileName), Wgs84ProjectionWkt, sourceFormat, features)];
+    }
+
+    // Read the KML files inside a KMZ and keep KMZ as the export format.
+    private static async Task<IReadOnlyList<ShapefileImport>> ReadKmzAsync(IFormFile file, CancellationToken cancellationToken)
+    {
+        var workDir = CreateWorkDirectory();
+        try
+        {
+            var kmzPath = Path.Combine(workDir, "upload.kmz");
+            await using (var stream = File.Create(kmzPath))
+            {
+                await file.CopyToAsync(stream, cancellationToken);
+            }
+
+            ZipFile.ExtractToDirectory(kmzPath, workDir);
+            var kmlPaths = Directory.GetFiles(workDir, "*.kml", SearchOption.AllDirectories);
+            if (kmlPaths.Length == 0)
+            {
+                throw new InvalidOperationException("The .kmz must contain at least one .kml file.");
+            }
+
+            var imports = new List<ShapefileImport>();
+            foreach (var kmlPath in kmlPaths)
+            {
+                await using var stream = File.OpenRead(kmlPath);
+                var document = await XDocument.LoadAsync(stream, LoadOptions.None, cancellationToken);
+                var features = ReadKmlFeatures(document).ToList();
+                ValidateFeatureCount(Path.GetFileName(kmlPath), features.Count);
+                if (features.Count > 0)
+                {
+                    imports.Add(new ShapefileImport(Path.GetFileNameWithoutExtension(kmlPath), Wgs84ProjectionWkt, "kmz", features));
+                }
+            }
+
+            return imports;
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    // Write the current database features into a shapefile ZIP.
+    private static ExportResult WriteShapefileZip(string datasetName, string? projectionWkt, IReadOnlyList<SpatialFeature> features)
+    {
         var workDir = CreateWorkDirectory();
         try
         {
@@ -117,16 +226,14 @@ public sealed class ShapefileService : IShapefileService
             {
                 foreach (var path in Directory.GetFiles(workDir, $"{safeName}.*"))
                 {
-                    if (Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+                    if (!Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase))
                     {
-                        continue;
+                        archive.CreateEntryFromFile(path, Path.GetFileName(path), CompressionLevel.Optimal);
                     }
-
-                    archive.CreateEntryFromFile(path, Path.GetFileName(path), CompressionLevel.Optimal);
                 }
             }
 
-            return Task.FromResult(File.ReadAllBytes(zipPath));
+            return new ExportResult(File.ReadAllBytes(zipPath), "application/zip", $"{safeName}-edited.zip");
         }
         finally
         {
@@ -134,7 +241,50 @@ public sealed class ShapefileService : IShapefileService
         }
     }
 
-    // Read the original .prj text so downloads keep the same declared spatial reference.
+    // Write edited features as a GeoJSON FeatureCollection.
+    private static ExportResult WriteGeoJson(string datasetName, IReadOnlyList<SpatialFeature> features)
+    {
+        var collection = new FeatureCollection();
+        foreach (var spatialFeature in features)
+        {
+            collection.Add(new Feature(spatialFeature.Geometry, ToAttributesTable(spatialFeature.Properties)));
+        }
+
+        var json = JsonSerializer.Serialize(collection, GeoJsonOptions);
+        return new ExportResult(Encoding.UTF8.GetBytes(json), "application/geo+json", $"{SanitizeName(datasetName)}-edited.geojson");
+    }
+
+    // Write edited features as plain KML.
+    private static ExportResult WriteKml(string datasetName, IReadOnlyList<SpatialFeature> features)
+    {
+        var bytes = Encoding.UTF8.GetBytes(BuildKmlDocument(datasetName, features).ToString(SaveOptions.DisableFormatting));
+        return new ExportResult(bytes, "application/vnd.google-earth.kml+xml", $"{SanitizeName(datasetName)}-edited.kml");
+    }
+
+    // Write edited features as KMZ, a zip containing doc.kml.
+    private static ExportResult WriteKmz(string datasetName, IReadOnlyList<SpatialFeature> features)
+    {
+        var workDir = CreateWorkDirectory();
+        try
+        {
+            var safeName = SanitizeName(datasetName);
+            var kmlPath = Path.Combine(workDir, "doc.kml");
+            File.WriteAllText(kmlPath, BuildKmlDocument(datasetName, features).ToString(SaveOptions.DisableFormatting), new UTF8Encoding(false));
+            var kmzPath = Path.Combine(workDir, $"{safeName}.kmz");
+            using (var archive = ZipFile.Open(kmzPath, ZipArchiveMode.Create))
+            {
+                archive.CreateEntryFromFile(kmlPath, "doc.kml", CompressionLevel.Optimal);
+            }
+
+            return new ExportResult(File.ReadAllBytes(kmzPath), "application/vnd.google-earth.kmz", $"{safeName}-edited.kmz");
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    // Read the original .prj text so shapefile downloads keep the same declared spatial reference.
     private static string? ReadProjectionWkt(string shpPath)
     {
         var prjPath = Path.ChangeExtension(shpPath, ".prj");
@@ -165,13 +315,261 @@ public sealed class ShapefileService : IShapefileService
         return path;
     }
 
-    // Convert DBF attribute values into JSON-safe values for PostgreSQL jsonb.
+    // Keep large user uploads from freezing the browser editor.
+    private static void ValidateFeatureCount(string fileName, int count)
+    {
+        if (count > MaxFeaturesPerDataset)
+        {
+            throw new InvalidOperationException(
+                $"{fileName} has {count} features. Upload vector layers with {MaxFeaturesPerDataset} features or fewer.");
+        }
+    }
+
+    // Normalize SRID for browser and KML/GeoJSON editing.
+    private static Geometry NormalizeGeometry(Geometry geometry)
+    {
+        if (geometry.SRID <= 0)
+        {
+            geometry.SRID = 4326;
+        }
+
+        return geometry;
+    }
+
+    // Convert DBF/KML/GeoJSON attribute values into JSON-safe values for PostgreSQL jsonb.
     private static object? NormalizeAttribute(object? value) => value switch
     {
         DBNull => null,
         DateTime date => date.ToString("yyyy-MM-dd"),
+        JsonElement element => UnwrapJsonElement(element),
         _ => value
     };
+
+    // Parse KML placemarks into spatial features.
+    private static IEnumerable<SpatialFeature> ReadKmlFeatures(XDocument document)
+    {
+        foreach (var placemark in document.Descendants().Where(element => element.Name.LocalName == "Placemark"))
+        {
+            var geometry = ReadKmlGeometry(placemark);
+            if (geometry is null) continue;
+
+            var properties = ReadKmlProperties(placemark);
+            yield return new SpatialFeature
+            {
+                Geometry = NormalizeGeometry(geometry),
+                Properties = properties
+            };
+        }
+    }
+
+    // KML geometries are nested by element name rather than a single geometry JSON object.
+    private static Geometry? ReadKmlGeometry(XElement placemark)
+    {
+        var geometryElement = placemark.Elements().FirstOrDefault(IsKmlGeometryElement)
+            ?? placemark.Descendants().FirstOrDefault(IsKmlGeometryElement);
+        return geometryElement is null ? null : ReadKmlGeometryElement(geometryElement);
+    }
+
+    private static Geometry? ReadKmlGeometryElement(XElement element) =>
+        element.Name.LocalName switch
+        {
+            "Point" => ReadPoint(element),
+            "LineString" => ReadLineString(element),
+            "Polygon" => ReadPolygon(element),
+            "MultiGeometry" => ReadMultiGeometry(element),
+            _ => null
+        };
+
+    private static bool IsKmlGeometryElement(XElement element) =>
+        element.Name.LocalName is "Point" or "LineString" or "Polygon" or "MultiGeometry";
+
+    private static Point? ReadPoint(XElement element)
+    {
+        var coordinates = ReadCoordinates(element).ToList();
+        return coordinates.Count == 0 ? null : Wgs84GeometryFactory.CreatePoint(coordinates[0]);
+    }
+
+    private static LineString? ReadLineString(XElement element)
+    {
+        var coordinates = ReadCoordinates(element).ToArray();
+        return coordinates.Length < 2 ? null : Wgs84GeometryFactory.CreateLineString(coordinates);
+    }
+
+    private static Polygon? ReadPolygon(XElement element)
+    {
+        var outer = element.Descendants().FirstOrDefault(item => item.Name.LocalName == "outerBoundaryIs");
+        var shellCoordinates = outer is null ? [] : ReadCoordinates(outer).ToArray();
+        if (shellCoordinates.Length < 4) return null;
+
+        var shell = Wgs84GeometryFactory.CreateLinearRing(CloseRing(shellCoordinates));
+        var holes = element.Descendants()
+            .Where(item => item.Name.LocalName == "innerBoundaryIs")
+            .Select(item => ReadCoordinates(item).ToArray())
+            .Where(coordinates => coordinates.Length >= 4)
+            .Select(coordinates => Wgs84GeometryFactory.CreateLinearRing(CloseRing(coordinates)))
+            .ToArray();
+        return Wgs84GeometryFactory.CreatePolygon(shell, holes);
+    }
+
+    private static Geometry? ReadMultiGeometry(XElement element)
+    {
+        var geometries = element.Elements()
+            .Select(ReadKmlGeometryElement)
+            .Where(geometry => geometry is not null)
+            .Select(geometry => geometry!)
+            .ToArray();
+        if (geometries.Length == 0) return null;
+        if (geometries.All(geometry => geometry is Point))
+        {
+            return Wgs84GeometryFactory.CreateMultiPoint(geometries.Cast<Point>().ToArray());
+        }
+        if (geometries.All(geometry => geometry is LineString))
+        {
+            return Wgs84GeometryFactory.CreateMultiLineString(geometries.Cast<LineString>().ToArray());
+        }
+        if (geometries.All(geometry => geometry is Polygon))
+        {
+            return Wgs84GeometryFactory.CreateMultiPolygon(geometries.Cast<Polygon>().ToArray());
+        }
+
+        return Wgs84GeometryFactory.CreateGeometryCollection(geometries);
+    }
+
+    private static IEnumerable<Coordinate> ReadCoordinates(XElement element)
+    {
+        var text = element.Descendants().FirstOrDefault(item => item.Name.LocalName == "coordinates")?.Value ?? string.Empty;
+        foreach (var tuple in text.Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = tuple.Split(',', StringSplitOptions.TrimEntries);
+            if (parts.Length < 2) continue;
+            if (double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var longitude)
+                && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var latitude))
+            {
+                yield return new Coordinate(longitude, latitude);
+            }
+        }
+    }
+
+    private static Coordinate[] CloseRing(Coordinate[] coordinates)
+    {
+        if (coordinates.Length == 0 || coordinates[0].Equals2D(coordinates[^1]))
+        {
+            return coordinates;
+        }
+
+        return [.. coordinates, coordinates[0]];
+    }
+
+    private static Dictionary<string, object?> ReadKmlProperties(XElement placemark)
+    {
+        var properties = new Dictionary<string, object?>();
+        var name = placemark.Elements().FirstOrDefault(element => element.Name.LocalName == "name")?.Value;
+        if (!string.IsNullOrWhiteSpace(name)) properties["name"] = name.Trim();
+        var description = placemark.Elements().FirstOrDefault(element => element.Name.LocalName == "description")?.Value;
+        if (!string.IsNullOrWhiteSpace(description)) properties["description"] = description.Trim();
+
+        foreach (var data in placemark.Descendants().Where(element => element.Name.LocalName == "Data"))
+        {
+            var key = data.Attribute("name")?.Value;
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            var value = data.Elements().FirstOrDefault(element => element.Name.LocalName == "value")?.Value;
+            properties[key] = value;
+        }
+
+        return properties;
+    }
+
+    // Build a compact KML document from edited features.
+    private static XDocument BuildKmlDocument(string datasetName, IReadOnlyList<SpatialFeature> features)
+    {
+        XNamespace kml = "http://www.opengis.net/kml/2.2";
+        return new XDocument(
+            new XDeclaration("1.0", "UTF-8", null),
+            new XElement(kml + "kml",
+                new XElement(kml + "Document",
+                    new XElement(kml + "name", datasetName),
+                    features.Select((feature, index) =>
+                        new XElement(kml + "Placemark",
+                            new XElement(kml + "name", FeatureName(feature, index)),
+                            BuildExtendedData(kml, feature.Properties),
+                            BuildKmlGeometry(kml, feature.Geometry))))));
+    }
+
+    private static string FeatureName(SpatialFeature feature, int index)
+    {
+        if (feature.Properties.TryGetValue("name", out var name) && !IsBlankString(name ?? string.Empty))
+        {
+            return name?.ToString() ?? $"Feature {index + 1}";
+        }
+
+        return $"Feature {index + 1}";
+    }
+
+    private static XElement BuildExtendedData(XNamespace kml, Dictionary<string, object?> properties) =>
+        new(kml + "ExtendedData",
+            properties.Select(property =>
+                new XElement(kml + "Data",
+                    new XAttribute("name", property.Key),
+                    new XElement(kml + "value", UnwrapJsonElement(property.Value)?.ToString() ?? string.Empty))));
+
+    private static XElement BuildKmlGeometry(XNamespace kml, Geometry geometry) =>
+        geometry switch
+        {
+            Point point => new XElement(kml + "Point", new XElement(kml + "coordinates", FormatCoordinate(point.Coordinate))),
+            LineString line => new XElement(kml + "LineString", new XElement(kml + "coordinates", FormatCoordinates(line.Coordinates))),
+            Polygon polygon => BuildKmlPolygon(kml, polygon),
+            MultiPoint multiPoint => new XElement(kml + "MultiGeometry", multiPoint.Geometries.Select(geometry => BuildKmlGeometry(kml, geometry))),
+            MultiLineString multiLine => new XElement(kml + "MultiGeometry", multiLine.Geometries.Select(geometry => BuildKmlGeometry(kml, geometry))),
+            MultiPolygon multiPolygon => new XElement(kml + "MultiGeometry", multiPolygon.Geometries.Select(geometry => BuildKmlGeometry(kml, geometry))),
+            GeometryCollection collection => new XElement(kml + "MultiGeometry", collection.Geometries.Select(geometry => BuildKmlGeometry(kml, geometry))),
+            _ => new XElement(kml + "Point", new XElement(kml + "coordinates", "0,0"))
+        };
+
+    private static XElement BuildKmlPolygon(XNamespace kml, Polygon polygon) =>
+        new(kml + "Polygon",
+            new XElement(kml + "outerBoundaryIs",
+                new XElement(kml + "LinearRing",
+                    new XElement(kml + "coordinates", FormatCoordinates(polygon.ExteriorRing.Coordinates)))),
+            Enumerable.Range(0, polygon.NumInteriorRings)
+                .Select(index => new XElement(kml + "innerBoundaryIs",
+                    new XElement(kml + "LinearRing",
+                        new XElement(kml + "coordinates", FormatCoordinates(polygon.GetInteriorRingN(index).Coordinates))))));
+
+    private static string FormatCoordinates(IEnumerable<Coordinate> coordinates) =>
+        string.Join(" ", coordinates.Select(FormatCoordinate));
+
+    private static string FormatCoordinate(Coordinate coordinate) =>
+        string.Create(CultureInfo.InvariantCulture, $"{coordinate.X},{coordinate.Y}");
+
+    // Convert NTS attributes into a JSON-safe dictionary.
+    private static Dictionary<string, object?> ToDictionary(IAttributesTable attributes)
+    {
+        var dictionary = new Dictionary<string, object?>();
+        foreach (var name in attributes.GetNames())
+        {
+            dictionary[name] = NormalizeAttribute(attributes[name]);
+        }
+
+        return dictionary;
+    }
+
+    private static AttributesTable ToAttributesTable(Dictionary<string, object?> properties)
+    {
+        var attributes = new AttributesTable();
+        foreach (var (key, value) in properties)
+        {
+            attributes.Add(key, UnwrapJsonElement(value));
+        }
+
+        return attributes;
+    }
+
+    private static JsonSerializerOptions CreateGeoJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new GeoJsonConverterFactory());
+        return options;
+    }
 
     // Build one stable DBF schema for every feature so blank edited values do not change field types.
     private static IReadOnlyList<DbfFieldMapping> BuildFieldMappings(IReadOnlyList<SpatialFeature> features)
@@ -252,25 +650,25 @@ public sealed class ShapefileService : IShapefileService
     // Pull primitive CLR values out of jsonb values loaded through System.Text.Json.
     private static object? UnwrapJsonElement(object? value)
     {
-        if (value is not System.Text.Json.JsonElement element)
+        if (value is not JsonElement element)
         {
             return value;
         }
 
         return element.ValueKind switch
         {
-            System.Text.Json.JsonValueKind.Number when element.TryGetInt32(out var intValue) => intValue,
-            System.Text.Json.JsonValueKind.Number when element.TryGetInt64(out var longValue) => longValue,
-            System.Text.Json.JsonValueKind.Number when element.TryGetDouble(out var doubleValue) => doubleValue,
-            System.Text.Json.JsonValueKind.True => true,
-            System.Text.Json.JsonValueKind.False => false,
-            System.Text.Json.JsonValueKind.String => element.GetString(),
-            System.Text.Json.JsonValueKind.Null => null,
+            JsonValueKind.Number when element.TryGetInt32(out var intValue) => intValue,
+            JsonValueKind.Number when element.TryGetInt64(out var longValue) => longValue,
+            JsonValueKind.Number when element.TryGetDouble(out var doubleValue) => doubleValue,
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Null => null,
             _ => element.ToString()
         };
     }
 
-    // Remove characters that are invalid in a generated shapefile name.
+    // Remove characters that are invalid in generated download names.
     private static string SanitizeName(string value)
     {
         var invalid = Path.GetInvalidFileNameChars();
@@ -356,7 +754,7 @@ public sealed class ShapefileService : IShapefileService
             _ => null
         };
 
-    // Best-effort cleanup for temporary shapefile import/export folders.
+    // Best-effort cleanup for temporary vector import/export folders.
     private static void TryDelete(string path)
     {
         try

@@ -2,7 +2,7 @@ using NetTopologySuite.Geometries;
 
 namespace Api.Contracts;
 
-public sealed record DatasetSummary(Guid Id, string Name, string GeometryType, int FeatureCount, DateTime CreatedAtUtc);
+public sealed record DatasetSummary(Guid Id, string Name, string GeometryType, string SourceFormat, int FeatureCount, DateTime CreatedAtUtc);
 
 public sealed record FeatureCollectionDto(
     string Type,

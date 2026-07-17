@@ -25,6 +25,7 @@ public sealed class DatasetsController(EditingDbContext db, IShapefileService sh
                 dataset.Id,
                 dataset.Name,
                 dataset.GeometryType,
+                dataset.SourceFormat,
                 db.Features.Count(feature => feature.DatasetId == dataset.Id),
                 dataset.CreatedAtUtc))
             .ToListAsync(cancellationToken);
@@ -45,7 +46,7 @@ public sealed class DatasetsController(EditingDbContext db, IShapefileService sh
         IReadOnlyList<ShapefileImport> imports;
         try
         {
-            imports = await shapefileService.ReadZipAsync(file, cancellationToken);
+            imports = await shapefileService.ReadAsync(file, cancellationToken);
         }
         catch (InvalidOperationException exception)
         {
@@ -76,6 +77,7 @@ public sealed class DatasetsController(EditingDbContext db, IShapefileService sh
                     SessionId = sessionId,
                     Name = import.Name,
                     GeometryType = features.First().Geometry.GeometryType,
+                    SourceFormat = import.SourceFormat,
                     ProjectionWkt = import.ProjectionWkt,
                     Features = []
                 };
@@ -94,6 +96,7 @@ public sealed class DatasetsController(EditingDbContext db, IShapefileService sh
                 row.Dataset.Id,
                 row.Dataset.Name,
                 row.Dataset.GeometryType,
+                row.Dataset.SourceFormat,
                 row.Features.Count,
                 row.Dataset.CreatedAtUtc)).ToList());
     }
@@ -285,8 +288,8 @@ public sealed class DatasetsController(EditingDbContext db, IShapefileService sh
         }
 
         var features = await LoadFeaturesAsync(id, cancellationToken);
-        var bytes = await shapefileService.WriteZipAsync(dataset.Name, dataset.ProjectionWkt, features, cancellationToken);
-        return File(bytes, "application/zip", $"{dataset.Name}-edited.zip");
+        var export = await shapefileService.WriteAsync(dataset.Name, dataset.ProjectionWkt, dataset.SourceFormat, features, cancellationToken);
+        return File(export.Bytes, export.ContentType, export.FileName);
     }
 
     // Delete one layer and all of its persisted features from PostGIS.
@@ -330,7 +333,7 @@ public sealed class DatasetsController(EditingDbContext db, IShapefileService sh
 
     // Convert database entities into the sidebar list contract.
     private static DatasetSummary ToSummary(SpatialDataset dataset) =>
-        new(dataset.Id, dataset.Name, dataset.GeometryType, dataset.Features.Count, dataset.CreatedAtUtc);
+        new(dataset.Id, dataset.Name, dataset.GeometryType, dataset.SourceFormat, dataset.Features.Count, dataset.CreatedAtUtc);
 
     // Reload one layer after save/add so the browser receives fresh ids, attributes, and feature count.
     private async Task<FeatureCollectionDto> LoadFeatureCollectionAsync(Guid datasetId, string sessionId, CancellationToken cancellationToken)

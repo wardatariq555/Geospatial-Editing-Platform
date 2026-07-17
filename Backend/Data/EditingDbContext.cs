@@ -27,6 +27,7 @@ public sealed class EditingDbContext(DbContextOptions<EditingDbContext> options)
             entity.Property(dataset => dataset.SessionId).HasMaxLength(64).HasDefaultValue("default-session");
             entity.Property(dataset => dataset.Name).HasMaxLength(180);
             entity.Property(dataset => dataset.GeometryType).HasMaxLength(40);
+            entity.Property(dataset => dataset.SourceFormat).HasMaxLength(20).HasDefaultValue("shp");
             entity.Property(dataset => dataset.ProjectionWkt).HasColumnType("text");
             entity.Property(dataset => dataset.CreatedAtUtc).HasDefaultValueSql("now()");
             entity.HasIndex(dataset => dataset.SessionId);

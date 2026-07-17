@@ -747,12 +747,12 @@ function App() {
         </div>
 
         <form className="upload-panel" onSubmit={uploadDataset}>
-          <label htmlFor="shapefile">Upload zipped shapefiles</label>
+          <label htmlFor="shapefile">Upload vector data (.zip, .geojson, .json, .kml, .kmz)</label>
           <input
             id="shapefile"
             ref={uploadInputRef}
             type="file"
-            accept=".zip"
+            accept=".zip,.geojson,.json,.kml,.kmz"
             onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
           />
           <button type="submit" disabled={!uploadFile || isBusy}>
@@ -1415,12 +1415,12 @@ function WelcomeDialog({ onClose }) {
         <button type="button" className="welcome-close" onClick={onClose} aria-label="Close welcome window">x</button>
         <h2 id="welcome-title">GIS Editing App</h2>
         <p>
-          Upload zipped shapefiles, inspect their geometry and attributes, edit vector features, then download the updated shapefile.
+          Upload shapefile ZIPs, GeoJSON, KML, or KMZ files, inspect their geometry and attributes, edit vector features, then download the updated data in the same format.
         </p>
         <div className="welcome-grid">
           <article>
             <strong>1. Upload layers</strong>
-            <span>Choose a ZIP containing shapefile parts. Each shapefile appears as a layer in the left panel.</span>
+            <span>Choose a shapefile ZIP, GeoJSON, KML, or KMZ file. Each imported dataset appears as a layer in the left panel.</span>
           </article>
           <article>
             <strong>2. Turn on visibility</strong>
@@ -1432,7 +1432,7 @@ function WelcomeDialog({ onClose }) {
           </article>
           <article>
             <strong>4. Save and download</strong>
-            <span>Draw, move, cut, delete, or update attributes. Click Save, then Download to export the edited shapefile.</span>
+            <span>Draw, move, cut, delete, or update attributes. Click Save, then Download to export in the uploaded format.</span>
           </article>
         </div>
         <button type="button" className="welcome-primary" onClick={onClose}>Start editing</button>

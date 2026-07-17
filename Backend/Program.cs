@@ -57,6 +57,7 @@ static async Task EnsureSessionColumnsAsync(EditingDbContext db)
         """
         ALTER TABLE datasets ADD COLUMN IF NOT EXISTS "SessionId" text NOT NULL DEFAULT 'default-session';
         ALTER TABLE datasets ADD COLUMN IF NOT EXISTS "ProjectionWkt" text NULL;
+        ALTER TABLE datasets ADD COLUMN IF NOT EXISTS "SourceFormat" character varying(20) NOT NULL DEFAULT 'shp';
         ALTER TABLE features ADD COLUMN IF NOT EXISTS "SessionId" text NOT NULL DEFAULT 'default-session';
         CREATE INDEX IF NOT EXISTS "IX_datasets_SessionId" ON datasets ("SessionId");
         CREATE INDEX IF NOT EXISTS "IX_features_SessionId_DatasetId" ON features ("SessionId", "DatasetId");
